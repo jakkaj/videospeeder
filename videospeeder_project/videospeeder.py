@@ -222,10 +222,11 @@ def parse_silencedetect_output(stderr):
         intervals.append((start, end))
     return intervals
 
-def calculate_segments(silence_intervals, video_duration):
+def calculate_segments(silence_intervals, video_duration, buffer_duration=2.0):
     """
     Given silence intervals and total duration, returns a list of segments:
     Each segment is (start, end, type) where type is 'silent' or 'non-silent'.
+    Adds a buffer of normal speed (non-silent) before each non-silent segment.
     """
     segments = []
     prev_end = 0.0
@@ -244,7 +245,34 @@ def calculate_segments(silence_intervals, video_duration):
     # Any remaining non-silent at the end
     if prev_end < video_duration:
         segments.append((prev_end, video_duration, "non-silent"))
-    return segments
+
+    # Post-process to add buffer before each non-silent segment
+    adjusted_segments = []
+    i = 0
+    while i < len(segments):
+        seg = segments[i]
+        if seg[2] == "silent" and i + 1 < len(segments) and segments[i + 1][2] == "non-silent":
+            silent_start, silent_end, _ = seg
+            next_non_silent_start, next_non_silent_end, _ = segments[i + 1]
+            # Only adjust if silent segment is longer than buffer
+            if silent_end - silent_start > buffer_duration:
+                # Shorten silent segment
+                new_silent_end = max(silent_start, silent_end - buffer_duration)
+                adjusted_segments.append((silent_start, new_silent_end, "silent"))
+                # Insert buffer as non-silent
+                buffer_start = new_silent_end
+                buffer_end = silent_end
+                adjusted_segments.append((buffer_start, buffer_end, "non-silent"))
+                # Adjust next non-silent segment to start after buffer
+                segments[i + 1] = (buffer_end, next_non_silent_end, "non-silent")
+            else:
+                # If silent segment is too short, treat as non-silent
+                adjusted_segments.append((silent_start, silent_end, "non-silent"))
+            i += 1
+        else:
+            adjusted_segments.append(seg)
+            i += 1
+    return adjusted_segments
 
 def build_filtergraph(segments, speed, indicator, use_gpu_decode=False):
     """
