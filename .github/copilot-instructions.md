@@ -1,92 +1,104 @@
-# Rules from .clinerules:
-# Rules from:
+## Repository Info
+- Project lives in **`jakkaj/videospeeder`**. Use this for GitHub operations.
+- **General Rule:** When tests fail, add debug output before guessing. Clean up once fixed.
+- **IMPORTANT:** Some tasks have detailed guides—**always consult** them.
 
-- **Repository Info**: This project resides in the `jakkaj/videospeeder` GitHub repository. Use this for relevant GitHub operations.
-- General Rule: Always add debug output to tests if they are failing rather than guessing. Remember to clean up when it's working!
-- **IMPORTANT**: Specific tasks often have detailed guidelines linked below. YOU MUST CONSULT these guides when your task relates to the corresponding topic to ensure correctness and adherence to project standards.
+---
 
-# Following Plans Rules
+## Following Plans
+1. Follow plan phases; tick tasks off when complete.
+2. Do **not** mark a task complete until its tests pass.
 
-- When coding, you need to follow the plan phases and check off the tasks as they are completed.
-- As you complete a task, update the plan and mark that task complete before you begin the next task.
-- Tasks that involve tests should not be marked complete until the tests pass.
+### Plan Structure
+- Store plans in `docs/plans/<folder‑with‑issue‑number>`.
+- Ask for an issue number if none is given.
+- Use numbered *phases* and *tasks* (e.g. *Phase 1*, *Task 1.1*).
+- Provide a checklist (`- [ ]` / `- [x]`).
+- Finish with overall success criteria.
 
-# Plan Structure Guidelines
+---
 
-- Plans and architectures that you produce should go under `docs/plans/<new folder for this plan with issue number>`
-- If I did not give you a GitHub issue number then you must ask for one then use that in the file name.
-- When creating a plan, organize it into numbered phases (e.g., "Phase 1: Setup Dependencies")
-- Break down each phase into specific tasks with numeric identifiers (e.g., "Task 1.1: Add Dependencies")
-- Please only create one document per plan.
-- Include a detailed checklist at the end of the document that maps to all phases and tasks
-- Mark tasks as `- [ ]` for pending tasks and `- [x]` for completed tasks
-- Start all planning tasks as unchecked, and update them to checked as implementation proceeds
-- Each planning task should have clear success criteria
-- End the plan with success criteria that define when the implementation is complete
+## Running Commands
+- Use **`make`** (see `Makefile`).
 
-# Running Commands Rules
+---
 
-- Use `make` to run commands like build, test, run, etc.
-- You can look at the makefile for available commands.
+## GitHub Integration
+- Work through the **`github` MCP server**. Always pull the issue first (`get_issue`) and push updates with `update_issue`.
+- Keep the GitHub issue body and your local plan in sync; add a one‑line comment for every meaningful change.
 
-## Github Integration
-- For rules specific to interacting with GitHub issues, commits, and MCP tools within this project, **you MUST consult**: `docs/guides/github-integration-rules.md`
-- Follow the conventional commits specification for all commits as outlined in the GitHub integration rules guide.
-- For detailed general guidance on working with GitHub workflows, PRs, and Git operations, **you MUST consult** the comprehensive guide at: `docs/guides/github-workflow/llm-agent-github-guide.md`
+### Branch → PR → Main Flow
+- Name branches `issue-<issue>-phase-<phase>`.
+- Push the branch and open a PR against `main`; CI runs automatically.
+- Merge via **squash** once reviews and all checks pass, then delete the branch.
 
-## Memory Knowledge Graph Workflow (REQUIRED)
+### CI Debug Rule
+1. Read the workflow logs.
+2. Add targeted debug output to the failing tests or scripts.
+3. Make tests resilient to environment quirks (OS, Node version, etc.).
 
-Detailed plan available at: `docs/plans/flutter_setup/memory_usage/improved_memory_usage.md`
+### Commit & Release
+- Follow **Conventional Commits** (`feat`, `fix`, `docs`, `chore`, etc.).
+- Add `!` or a `BREAKING CHANGE:` footer for majors; reference issues in the footer (`Fixes #123`).
+- Semantic‑release auto‑bumps versions and pushes Docker images—no manual versioning.
 
-### MANDATORY RETRIEVAL WORKFLOW:
-1. At the START of every task: SEARCH memory for related concepts
-   - Use specific terms related to your task (e.g., "search_nodes({"query": "logging"})")
-   - Include in your thinking: "Memory shows: [key findings]"
-2. Before EACH implementation step: VERIFY current understanding
-   - Check if memory contains relevant information for your current subtask
-3. Before answering questions: CHECK memory FIRST
-   - Always prioritize memory over other research methods
+# Memory and knowledge base
 
-### MANDATORY UPDATE WORKFLOW:
-1. After LEARNING about codebase structure
-2. After IMPLEMENTING new features or modifications
-3. After DISCOVERING inconsistencies between memory and code
-4. After USER shares new information about project patterns
+> **Purpose**  Keep memory lean and *useful* by recording only the non‑obvious, searchable decisions that spare future agents from trawling the whole code‑base and explain **what we were thinking at the time**.
 
-**NOTE** only update with relevant changes and why (i.e. the thinking). The aim here is so we can look back and know what was going on. We don't need to be too granular. 
+### Substantive ≠ Trivial
+- **Substantive** = new modules, public interfaces, config keys, cross‑cutting patterns, performance decisions, tests that codify behaviour, *reasons* for choosing an approach.
+- **Trivial** = renames, style fixes, comments, minor refactors, one‑line bug‑fixes that don’t change intent.
 
-### UPDATE ACTIONS:
-- CREATE/UPDATE entities for components/concepts
-- ADD atomic, factual observations (15 words max)
-- DELETE outdated observations when information changes
-- CONNECT related entities with descriptive relation types
-- CONFIRM in your thinking: "Memory updated: [summary]"
+### MANDATORY RETRIEVAL WORKFLOW
+1. **Start of every task:** search memory for related concepts.
+2. **Before each implementation step:** verify understanding with memory.
+3. **Before answering questions:** check memory first.
 
-### MEMORY QUALITY RULES:
-- Entities = Components, Features, Patterns, Practices (with specific types)
-- Observations = Single, specific facts about implementation details
-- Relations = Use descriptive types (contains, uses, implements)
-- AVOID duplicates by searching before creating new entries
-- MAINTAIN high-quality, factual knowledge
+### MANDATORY UPDATE WORKFLOW — **run only if change is Substantive**
+1. After implementing a new feature **or a change that alters behaviour, public API, configuration, or architecture.**
+2. After learning major code‑base structure.
+3. After discovering an inconsistency **that requires design clarification or a lasting workaround.** Record the *resolution*, not every mismatch.
+4. After deciding a design trade‑off (why A over B).
 
+#### UPDATE CHECKLIST
+Tick *at least one*; otherwise **skip memory update**.
+- [ ] Introduces or retires a concept/component?
+- [ ] Changes external behaviour or configuration?
+- [ ] Documents *why* we chose this approach?
 
-## File Change Tracking (REQUIRED)
+#### UPDATE ACTIONS (when checklist passes)
+- Max **3 observations** per update → summarise.
+- Create/Update entities for components/concepts.
+- Add atomic factual observations (≤ 15 words).
+- Delete outdated observations when info changes.
+- Link related entities with descriptive relations.
+- Avoid duplicates (search first).
+- Finish thinking with: `Memory updated: …`.
 
+---
 
-### MANDATORY FILE CHANGE TRACKING WORKFLOW:
-1. Before modifying a file: SEARCH memory for the file by name
-2. After implementing substantive changes:
-   - If file doesn't exist in memory, CREATE a SourceFile entity
-   - CREATE a FileChange entity with descriptive name and observations
-   - LINK the FileChange to the SourceFile with bidirectional relations
-   - If working on a plan, LINK the FileChange to the Plan entity
-3. When creating a plan: ADD it to memory graph as a Plan entity
-4. When completing a plan: UPDATE its status in memory
+## File Change Tracking  (REQUIRED)
 
-### FILE CHANGE TRACKING GUIDELINES:
-- Track only SUBSTANTIVE changes (features, architecture, bug fixes)
-- Skip trivial changes (formatting, comments, minor refactoring)
-- Use descriptive entity names indicating the nature of changes
-- Always link changes to their relevant plans when applicable
-- Keep file paths accurate and use present tense for descriptions
-- Update SourceFile entities when understanding of file purpose changes
+### MANDATORY WORKFLOW
+1. Before modifying a file: search memory by file name.
+2. **After committing** a substantive change (one or more files):
+   - If file absent in memory: create a `SourceFile` entity.
+   - Create a `FileChange` entity with descriptive name + observations.
+   - Link `FileChange` ↔ `SourceFile` (bidirectional).
+   - If change relates to a plan, link to `Plan` entity.
+3. When creating a plan: add a `Plan` entity; update status when complete.
+
+### GUIDELINES
+- Track only **substantive** changes (see definition).
+- Keep file paths accurate; use present tense.
+- Update `SourceFile` when file purpose changes.
+
+---
+
+## Examples
+✔️ **Added `logging.py`** – centralises log‑level config; default via `LOGLEVEL` env var.
+
+✔️ **Switched audio backend to FFmpeg** for hardware acceleration; decision: lower latency than PyAudio.
+
+❌ **Renamed** `process_chunk` → `handle_chunk` → *skip* (trivial).

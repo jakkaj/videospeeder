@@ -219,7 +219,7 @@ def parse_silencedetect_output(stderr):
         intervals.append((start, end))
     return intervals
 
-def calculate_segments(silence_intervals, video_duration, buffer_duration=2.0):
+def calculate_segments(silence_intervals, video_duration, buffer_duration=1.0):
     """
     Given silence intervals and total duration, returns a list of segments:
     Each segment is (start, end, type) where type is 'silent' or 'non-silent'.
@@ -358,17 +358,19 @@ def build_filtergraph(segments, indicator, use_gpu_decode=False, png_input_index
                 box_label = f"box{seg_idx}"
                 overlay_label = f"ovl{seg_idx}"
                 # Draw a semi-transparent black box first
-                # y=ih-h-10: Position box 10px from bottom edge (using input height 'ih' and box height 'h') - Reverted based on user feedback
-                vf_segment_chain += f";[{last_video_label}]drawbox=x=5:y=ih-h-10:w=400:h=220:color=black@0.5:t=fill[{box_label}]"
+                # Position everything top-left
+                # y=10: Position box 10px from top edge
+                vf_segment_chain += f";[{last_video_label}]drawbox=x=10:y=10:w=400:h=220:color=black@0.5:t=fill[{box_label}]"
                 last_video_label = box_label # Output of drawbox is input for overlay
                 # Chain overlay filter (takes 2 inputs: box stream and png input)
-                # Place overlay in bottom-left, on top of the box
-                vf_segment_chain += f";[{last_video_label}][{png_input_index}:v]overlay=x=10:y=H-h-10[{overlay_label}]"
+                # Place overlay in top-left, on top of the box
+                vf_segment_chain += f";[{last_video_label}][{png_input_index}:v]overlay=x=10:y=10[{overlay_label}]"
                 last_video_label = overlay_label # Output of overlay is input for drawtext
-                # Chain drawtext filter, place text right of icon, aligned near bottom, on top of the box
-                # x=w+20: Icon width (w) + 20px padding
-                # y=H-h-10: Align text bottom with icon bottom (approx)
-                vf_segment_chain += f";[{last_video_label}]drawtext=text='{int(current_speed)}x':x=w+20:y=H-h-10:fontsize=200:fontcolor=white:borderw=4[{v_label}]"
+                # Chain drawtext filter, place text right of icon, aligned near top, on top of the box
+                # x=10+w+10: Position text 10px right of the overlay icon (icon starts at x=10, width is 'w')
+                # y=10: Align text baseline near top
+                # Move text further right and down for better separation from icon
+                vf_segment_chain += f";[{last_video_label}]drawtext=text='{int(current_speed)}x':x=260:y=100:fontsize=60:fontcolor=white:borderw=4[{v_label}]"
                 last_video_label = v_label # Final label is v_label
             else:
                  # If silent but no indicator, alias last_video_label to v_label
