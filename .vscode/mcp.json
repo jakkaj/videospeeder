@@ -9,7 +9,7 @@
                 "--rm",
                 "--init",
                 "-v",
-                "./.roo:/data",
+                "/home/jak/github/videospeeder/.roo:/data",
                 "jakkaj/mcp-knowledge-graph",
                 "node",
                 "dist/index.js",

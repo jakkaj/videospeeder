@@ -1,3 +1,5 @@
+
+
 ## Repository Info
 - Project lives in **`jakkaj/videospeeder`**. Use this for GitHub operations.
 - **General Rule:** When tests fail, add debug output before guessing. Clean up once fixed.

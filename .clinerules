@@ -104,8 +104,3 @@ Tick *at least one*; otherwise **skip memory update**.
 ✔️ **Switched audio backend to FFmpeg** for hardware acceleration; decision: lower latency than PyAudio.
 
 ❌ **Renamed** `process_chunk` → `handle_chunk` → *skip* (trivial).
-
----
-
-*End of rules file.*
-
