@@ -355,12 +355,20 @@ def build_filtergraph(segments, indicator, use_gpu_decode=False, png_input_index
 
             # 3b. Apply indicator if requested
             if indicator:
+                box_label = f"box{seg_idx}"
                 overlay_label = f"ovl{seg_idx}"
-                # Chain overlay filter (takes 2 inputs: last video stream and png input)
-                vf_segment_chain += f";[{last_video_label}][{png_input_index}:v]overlay=x=W-w-10:y=H-h-10[{overlay_label}]"
-                last_video_label = overlay_label
-                # Chain drawtext filter
-                vf_segment_chain += f";[{last_video_label}]drawtext=text='{int(current_speed)}x':x=W-w-220:y=H-h-60:fontsize=200:fontcolor=white:borderw=4[{v_label}]"
+                # Draw a semi-transparent black box first
+                # y=ih-h-10: Position box 10px from bottom edge (using input height 'ih' and box height 'h') - Reverted based on user feedback
+                vf_segment_chain += f";[{last_video_label}]drawbox=x=5:y=ih-h-10:w=400:h=220:color=black@0.5:t=fill[{box_label}]"
+                last_video_label = box_label # Output of drawbox is input for overlay
+                # Chain overlay filter (takes 2 inputs: box stream and png input)
+                # Place overlay in bottom-left, on top of the box
+                vf_segment_chain += f";[{last_video_label}][{png_input_index}:v]overlay=x=10:y=H-h-10[{overlay_label}]"
+                last_video_label = overlay_label # Output of overlay is input for drawtext
+                # Chain drawtext filter, place text right of icon, aligned near bottom, on top of the box
+                # x=w+20: Icon width (w) + 20px padding
+                # y=H-h-10: Align text bottom with icon bottom (approx)
+                vf_segment_chain += f";[{last_video_label}]drawtext=text='{int(current_speed)}x':x=w+20:y=H-h-10:fontsize=200:fontcolor=white:borderw=4[{v_label}]"
                 last_video_label = v_label # Final label is v_label
             else:
                  # If silent but no indicator, alias last_video_label to v_label
