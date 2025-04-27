@@ -10,6 +10,9 @@ This tool intelligently analyzes your video, detects silent segments, and automa
 *   👨‍🏫 **Educators & Presenters:** Make lectures more engaging.
 *   💻 **Coders & Tutorial Makers:** Skip the thinking pauses in screen recordings.
 *   ...anyone who wants faster, tighter videos!
+[![VideoSpeeder in Action](media/videospeederinaction.png)](https://www.youtube.com/watch?v=XHBKlCnk-7k)
+
+🎥 [Have a look at a video that uses it here](https://www.youtube.com/watch?v=XHBKlCnk-7k).
 
 ## ✨ Key Features
 
