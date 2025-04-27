@@ -307,18 +307,49 @@ def build_filtergraph(segments, speed, indicator, use_gpu_decode=False):
         af = f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS"
         # Speed up silent segments
         if typ == "silent":
+            segment_duration = end - start
+            target_duration = 4.0 # Aim for ~4 second output for long segments
+            min_duration_for_variable_speed = 10.0
+            fixed_speed_short = 4.0
+
+            if segment_duration <= min_duration_for_variable_speed:
+                current_speed = fixed_speed_short
+            else:
+                # Calculate speed needed to reach target_duration
+                current_speed = max(1.0, segment_duration / target_duration) # Ensure speed is at least 1.0
+
             # Cap video speedup
-            video_speed = min(speed, MAX_VIDEO_SPEED)
+            video_speed = min(current_speed, MAX_VIDEO_SPEED)
             vf += f",setpts=PTS/{video_speed}"
+
             # Audio speedup: chain atempo filters, each up to MAX_ATEMPO
-            remain = speed
+            # Use the *uncapped* current_speed for audio calculation to match duration better,
+            # but the atempo filter itself has a max of 100 combined.
+            # Let's stick to the MAX_ATEMPO chaining logic which handles high speeds.
+            audio_speed = current_speed # Use the calculated speed before video capping
+            remain = audio_speed
             atempo_chain = []
+            # Build the chain of atempo filters needed
+            # Note: FFmpeg documentation suggests atempo values between 0.5 and 100.0
+            # We chain filters capped at MAX_ATEMPO (e.g., 2.0)
             while remain > MAX_ATEMPO:
-                atempo_chain.append(f"atempo={MAX_ATEMPO}")
-                remain /= MAX_ATEMPO
-            if remain != 1.0:
-                atempo_chain.append(f"atempo={remain:.2f}")
-            af += "," + ",".join(atempo_chain)
+                 # Check if applying another MAX_ATEMPO would exceed 100 total speedup for audio
+                 # This check might be overly complex; the filter likely handles internal limits.
+                 # Let's rely on the filter's internal limits and just chain MAX_ATEMPO.
+                 atempo_chain.append(f"atempo={MAX_ATEMPO}")
+                 remain /= MAX_ATEMPO
+
+            # Add the final fractional speedup if needed and > 1.0
+            if remain > 1.001: # Use tolerance for float comparison
+                # Ensure the final value is within the valid range (e.g., up to MAX_ATEMPO)
+                final_atempo = min(remain, MAX_ATEMPO)
+                # Avoid adding atempo=1.0
+                if final_atempo > 1.001:
+                    atempo_chain.append(f"atempo={final_atempo:.2f}")
+
+            if atempo_chain: # Only add if speed adjustment is needed
+                af += "," + ",".join(atempo_chain)
+
             if indicator:
                 vf += ",drawtext=text='>>':x=10:y=h-40:fontsize=36:fontcolor=white:borderw=2"
         vf += f"[{v_label}]"

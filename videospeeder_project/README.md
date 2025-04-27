@@ -68,9 +68,11 @@ python videospeeder.py -i input.mp4 -o output.mp4 -t -35 -d 0.7 -s 2.5 --indicat
 ## How it Works
 
 1. Detects silent intervals in the input video using FFmpeg.
-2. Calculates silent and non-silent segments.
-3. Builds a dynamic FFmpeg filtergraph to speed up silent segments and add indicators.
-4. Processes the video and outputs the result, showing a progress bar.
+2. Calculates silent and non-silent segments, including a 2-second buffer of normal speed before non-silent sections that follow silence.
+3. Builds a dynamic FFmpeg filtergraph to speed up silent segments and add indicators. The speedup logic is as follows:
+    - **Short Silence (3-10 seconds):** Sped up by a fixed factor of **4x**.
+    - **Long Silence (> 10 seconds):** Sped up dynamically. The speed factor is calculated to make the resulting segment approximately **4 seconds** long. This speedup is capped at a maximum of **100x** for video (`setpts`) and uses chained `atempo` filters for audio to handle high speed factors.
+4. Processes the video using the generated filtergraph and outputs the result, showing a progress bar.
 
 ## License
 

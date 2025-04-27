@@ -22,7 +22,7 @@ test:
 	python videospeeder.py --input "/mnt/c/Users/jorkni/Downloads/test speed upper.mp4" --output output_test.mp4 --indicator --gpu --gpu-decode
 
 test-segment:
-	python videospeeder.py --input "/mnt/c/Users/jorkni/Downloads/test speed upper.mp4" --output output_test_segment.mp4 --indicator --gpu --gpu-decode --offset 0 --process-duration 60 --threshold -20
+	python videospeeder.py --input "/mnt/c/Users/jorkni/OneDrive - Microsoft/Documents/ShareX/Screenshots/2025-04/msedge_oXFMOctKmD.mp4" --output output_test_segment.mp4 --indicator --gpu --gpu-decode
 
 clean:
 	rm -f *.mp4
