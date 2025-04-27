@@ -271,15 +271,17 @@ def calculate_segments(silence_intervals, video_duration, buffer_duration=2.0):
             i += 1
     return adjusted_segments
 
-def build_filtergraph(segments, indicator, use_gpu_decode=False):
+def build_filtergraph(segments, indicator, use_gpu_decode=False, png_input_index=1, png_path="fastforward.png"):
     """
     Builds a dynamic FFmpeg filtergraph string for the given segments.
     - segments: list of (start, end, type)
-    - indicator: bool, whether to add '>>' drawtext during silent segments
+    - indicator: bool, whether to add fastforward overlay during sped-up segments
     - use_gpu_decode: bool, whether GPU decode is active (insert hwdownload/format if True)
+    - png_input_index: index of the PNG input in FFmpeg (default 1, i.e., [1:v])
+    - png_path: path to the PNG file
     Returns: filtergraph string
     """
-    MAX_VIDEO_SPEED = 1000.0 # Cap for setpts (Increased from 100.0)
+    MAX_VIDEO_SPEED = 1000.0 # Cap for setpts
     MAX_ATEMPO = 2.0         # FFmpeg atempo max per filter
     vf_parts = []
     af_parts = []
@@ -287,80 +289,106 @@ def build_filtergraph(segments, indicator, use_gpu_decode=False):
     concat_a = []
     seg_idx = 0
 
-    # Warning for high speed is implicitly handled by the MAX_VIDEO_SPEED cap now.
-
     for start, end, typ in segments:
         v_label = f"v{seg_idx}"
         a_label = f"a{seg_idx}"
-        # Video trim
-        vf = f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS"
-        # If using GPU decode, insert hwdownload,format=yuv420p before software filters
-        if use_gpu_decode:
-            vf += ",hwdownload,format=yuv420p"
-        # Audio trim
+
+        # --- Audio part ---
         af = f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS"
-        # Speed up silent segments
         if typ == "silent":
             segment_duration = end - start
-            target_duration = 4.0 # Aim for ~4 second output for long segments
+            target_duration = 4.0
             min_duration_for_variable_speed = 10.0
             fixed_speed_short = 4.0
-
             if segment_duration <= min_duration_for_variable_speed:
                 current_speed = fixed_speed_short
             else:
-                # Calculate speed needed to reach target_duration
-                current_speed = max(1.0, segment_duration / target_duration) # Ensure speed is at least 1.0
+                current_speed = max(1.0, segment_duration / target_duration)
 
-            # Cap video speedup
-            video_speed = min(current_speed, MAX_VIDEO_SPEED)
-            vf += f",setpts=PTS/{video_speed}"
-
-            # Audio speedup: chain atempo filters, each up to MAX_ATEMPO
-            # Use the *uncapped* current_speed for audio calculation to match duration better,
-            # but the atempo filter itself has a max of 100 combined.
-            # Let's stick to the MAX_ATEMPO chaining logic which handles high speeds.
-            audio_speed = current_speed # Use the calculated speed before video capping
+            audio_speed = current_speed
             remain = audio_speed
             atempo_chain = []
-            # Build the chain of atempo filters needed
-            # Note: FFmpeg documentation suggests atempo values between 0.5 and 100.0
-            # We chain filters capped at MAX_ATEMPO (e.g., 2.0)
             while remain > MAX_ATEMPO:
-                 # Check if applying another MAX_ATEMPO would exceed 100 total speedup for audio
-                 # This check might be overly complex; the filter likely handles internal limits.
-                 # Let's rely on the filter's internal limits and just chain MAX_ATEMPO.
-                 atempo_chain.append(f"atempo={MAX_ATEMPO}")
-                 remain /= MAX_ATEMPO
-
-            # Add the final fractional speedup if needed and > 1.0
-            if remain > 1.001: # Use tolerance for float comparison
-                # Ensure the final value is within the valid range (e.g., up to MAX_ATEMPO)
+                atempo_chain.append(f"atempo={MAX_ATEMPO}")
+                remain /= MAX_ATEMPO
+            if remain > 1.001:
                 final_atempo = min(remain, MAX_ATEMPO)
-                # Avoid adding atempo=1.0
                 if final_atempo > 1.001:
                     atempo_chain.append(f"atempo={final_atempo:.2f}")
-
-            if atempo_chain: # Only add if speed adjustment is needed
+            if atempo_chain:
                 af += "," + ",".join(atempo_chain)
-
-            if indicator:
-                vf += ",drawtext=text='>>':x=10:y=h-40:fontsize=36:fontcolor=white:borderw=2"
-        vf += f"[{v_label}]"
         af += f"[{a_label}]"
-        vf_parts.append(vf)
         af_parts.append(af)
+
+        # --- Video part ---
+        vf_segment_chain = "" # Build the chain for this segment as a string
+        last_video_label = "[0:v]" # Start with the main video input
+
+        # 1. Trim and initial setpts
+        trim_label = f"trim{seg_idx}"
+        vf_segment_chain += f"{last_video_label}trim=start={start}:end={end},setpts=PTS-STARTPTS[{trim_label}]"
+        last_video_label = trim_label
+
+        # 2. Optional GPU download
+        if use_gpu_decode:
+            gpu_label = f"gpu{seg_idx}"
+            vf_segment_chain += f";[{last_video_label}]hwdownload,format=yuv420p[{gpu_label}]"
+            last_video_label = gpu_label
+
+        # 3. If silent, apply speedup and indicator
+        if typ == "silent":
+            # Recalculate speed (needed for video_speed and text)
+            segment_duration = end - start
+            target_duration = 4.0
+            min_duration_for_variable_speed = 10.0
+            fixed_speed_short = 4.0
+            if segment_duration <= min_duration_for_variable_speed:
+                current_speed = fixed_speed_short
+            else:
+                current_speed = max(1.0, segment_duration / target_duration)
+            video_speed = min(current_speed, MAX_VIDEO_SPEED)
+
+            # 3a. Apply speed change (setpts)
+            spedup_label = f"spedup{seg_idx}"
+            vf_segment_chain += f";[{last_video_label}]setpts=PTS/{video_speed}[{spedup_label}]"
+            last_video_label = spedup_label
+
+            # 3b. Apply indicator if requested
+            if indicator:
+                overlay_label = f"ovl{seg_idx}"
+                # Chain overlay filter (takes 2 inputs: last video stream and png input)
+                vf_segment_chain += f";[{last_video_label}][{png_input_index}:v]overlay=x=W-w-10:y=H-h-10[{overlay_label}]"
+                last_video_label = overlay_label
+                # Chain drawtext filter
+                vf_segment_chain += f";[{last_video_label}]drawtext=text='{int(current_speed)}x':x=W-w-220:y=H-h-60:fontsize=200:fontcolor=white:borderw=4[{v_label}]"
+                last_video_label = v_label # Final label is v_label
+            else:
+                 # If silent but no indicator, alias last_video_label to v_label
+                 vf_segment_chain += f";[{last_video_label}]null[{v_label}]"
+                 last_video_label = v_label
+        else:
+            # If not silent, alias last_video_label to v_label
+            vf_segment_chain += f";[{last_video_label}]null[{v_label}]"
+            last_video_label = v_label
+
+        # Append the completed chain for this segment
+        vf_parts.append(vf_segment_chain)
+
+        # Add segment labels for final concat
         concat_v.append(f"[{v_label}]")
         concat_a.append(f"[{a_label}]")
         seg_idx += 1
-    # Concat all segments
+
+    # --- Final filtergraph assembly ---
     n = len(segments)
+    # Join all segment filter chains first
     filtergraph = ";".join(vf_parts + af_parts)
-    filtergraph += f";{''.join(concat_v)}concat=n={n}:v=1:a=0[vout];"
-    filtergraph += f"{''.join(concat_a)}concat=n={n}:v=0:a=1[aout]"
+    # Then add the final concatenation filters
+    filtergraph += f";{''.join(concat_v)}concat=n={n}:v=1:a=0[vout]" # Concat video
+    filtergraph += f";{''.join(concat_a)}concat=n={n}:v=0:a=1[aout]" # Concat audio
     return filtergraph
 
-def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, codec_name, use_gpu=False, offset=0.0, process_duration=None):
+def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, codec_name, use_gpu=False, offset=0.0, process_duration=None, png_path="fastforward.png"):
     """
     Runs the main FFmpeg processing command with the given filtergraph and shows a tqdm progress bar.
     Selects hardware/software encoder/decoder based on codec_name and use_gpu.
@@ -416,6 +444,7 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
         cmd += ["-t", str(process_duration)]
     cmd += [
         "-i", input_file,
+        "-i", png_path,  # Add PNG as second input
         "-filter_complex", filtergraph,
         "-map", "[vout]",
         "-map", "[aout]",
@@ -430,6 +459,7 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
     print("Running FFmpeg processing command:")
     print(" ".join(cmd))
     try:
+        from tqdm import tqdm
         with tqdm(total=video_duration, unit="s", desc="Processing", dynamic_ncols=True) as pbar:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
             last_time = 0.0
@@ -470,25 +500,35 @@ def main():
     for k, v in vars(args).items():
         print(f"  {k}: {v}")
 
+    # Debug: Show current working directory and file list
+    print(f"[DEBUG] Current working directory: {os.getcwd()}")
+    print(f"[DEBUG] Files in cwd: {os.listdir(os.getcwd())}")
+
     # If indicator or any software filter is used, disable GPU decode (hardware decode)
     if args.indicator or True:  # Always True for now, as filtergraph always uses software filters
         print("[info] Disabling GPU decode due to software filters in filtergraph.")
         args.gpu_decode = False
 
     # Probe and print video stats before any processing
+    print(f"[DEBUG] Probing input file: {args.input}")
     probe_and_print_video_stats(args.input)
 
     # Error handling: Check for ffmpeg and ffprobe
     if shutil.which("ffmpeg") is None:
+        print("[DEBUG] ffmpeg not found in PATH.")
         print("Error: ffmpeg is not installed or not in PATH.")
         sys.exit(1)
     if shutil.which("ffprobe") is None:
+        print("[DEBUG] ffprobe not found in PATH.")
         print("Error: ffprobe is not installed or not in PATH.")
         sys.exit(1)
     # Check input file exists
     if not os.path.isfile(args.input):
+        print(f"[DEBUG] Input file existence check failed: {args.input}")
         print(f"Error: Input file '{args.input}' does not exist.")
         sys.exit(1)
+    else:
+        print(f"[DEBUG] Input file exists: {args.input}")
 
     try:
         # Task 2.1: Run silencedetect and print stderr
@@ -526,7 +566,9 @@ def main():
         filtergraph = build_filtergraph(
             segments,
             args.indicator,
-            use_gpu_decode=getattr(run_ffmpeg_processing, "use_gpu_decode", False)
+            use_gpu_decode=getattr(run_ffmpeg_processing, "use_gpu_decode", False),
+            png_input_index=1,
+            png_path="fastforward.png"
         )
         print("Generated FFmpeg filtergraph:")
         print(filtergraph)
@@ -544,10 +586,13 @@ def main():
             codec_name,
             use_gpu=args.gpu,
             offset=args.offset,
-            process_duration=args.process_duration
+            process_duration=args.process_duration,
+            png_path="fastforward.png"
         )
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"[DEBUG] Exception occurred in main(): {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":
