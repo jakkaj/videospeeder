@@ -1,6 +1,6 @@
 # Plan: Video Speeder Initial Implementation
 
-**GitHub Issue:** (Please provide the GitHub issue number if available)
+**GitHub Issue:** #1
 
 **Project Goal:** Create a Python command-line tool (`videospeeder`) that takes a video file, identifies silent sections based on a volume threshold, speeds up those sections by a configurable factor, adds a visual indicator (">>") during sped-up parts, and outputs the modified video.
 
@@ -9,18 +9,24 @@
 *   **Language:** Python 3.x
 *   **Video Processing:** FFmpeg (called via Python's `subprocess`)
 *   **Argument Parsing:** Python's `argparse` module
+*   **Progress Reporting:** `tqdm` library
 
 ---
 
 ## Phase 1: Project Setup & CLI
 
-*   **Task 1.1:** Create the main project directory structure (`videospeeder_project/`, `videospeeder.py`, `requirements.txt`, `README.md`).
-    *   *Success Criteria:* Directory and empty files exist.
+*   **Task 1.1:** Create the main project directory structure (`videospeeder_project/`, `videospeeder.py`, `requirements.txt`, `README.md`) and add `tqdm` to `requirements.txt`.
+    *   *Success Criteria:* Directory and files exist, `requirements.txt` lists `tqdm`.
 *   **Task 1.2:** Implement CLI argument parsing using `argparse` in `videospeeder.py`.
     *   Define arguments: `--input`, `--output`, `--threshold`, `--duration`, `--speed`, `--indicator`.
     *   Set default values as specified in the plan.
     *   *Success Criteria:* Script can parse arguments correctly, providing help messages and handling missing required arguments.
+*   **Task 1.3:** Add a Makefile to `videospeeder_project/` with targets for `run`, `install`, `clean`, and `help`.
+    *   *Success Criteria:* Makefile exists and allows running, installing, and cleaning the tool easily.
+*   **Task 1.4:** Add a Makefile `test` target to run the tool on `/mnt/c/Users/jorkni/Downloads/test speed upper.mp4`.
+    *   *Success Criteria:* `make test` runs the tool on the provided file and produces `output_test.mp4`.
 
+_Note: The Makefile enables easy running, installation, and cleaning of the tool. Use `make run ARGS="..."` for custom runs, `make test` for the provided test file, and `make install` to install dependencies._
 ## Phase 2: Silence Detection
 
 *   **Task 2.1:** Implement a function to execute the FFmpeg `silencedetect` filter using `subprocess.run()`.
@@ -58,8 +64,13 @@
     *   Print informative messages during execution stages.
     *   Catch potential exceptions during subprocess calls.
     *   *Success Criteria:* Script provides helpful messages and handles common errors gracefully.
-*   **Task 4.3:** Create the initial `README.md`.
-    *   Explain the tool's purpose, prerequisites (Python 3, FFmpeg installation), and basic usage instructions with CLI examples.
+*   **Task 4.3:** Implement progress reporting using `tqdm`.
+    *   Capture FFmpeg progress output (requires adding `-progress pipe:1` or similar to the FFmpeg command and reading `stdout`).
+    *   Parse progress data (e.g., total duration, current time/frame).
+    *   Update a `tqdm` progress bar based on the parsed progress.
+    *   *Success Criteria:* A clear `tqdm` progress bar is displayed during the main FFmpeg processing step.
+*   **Task 4.4:** Create the initial `README.md`.
+    *   Explain the tool's purpose, prerequisites (Python 3, FFmpeg installation, `tqdm`), and basic usage instructions with CLI examples.
     *   *Success Criteria:* `README.md` provides clear instructions for users.
 
 ---
@@ -91,22 +102,33 @@ graph TD
 ## Checklist
 
 **Phase 1: Project Setup & CLI**
-- [ ] Task 1.1: Create project directory structure.
-- [ ] Task 1.2: Implement CLI argument parsing.
+- [x] Task 1.1: Create project directory structure.
+- [x] Task 1.2: Implement CLI argument parsing.
+- [x] Task 1.3: Add Makefile with run/install/clean/help targets.
+- [x] Task 1.4: Add Makefile test target for /mnt/c/Users/jorkni/Downloads/test speed upper.mp4.
+
+**Phase 1: Project Setup & CLI**
+- [x] Task 1.1: Create project directory structure.
+- [x] Task 1.2: Implement CLI argument parsing.
+- [x] Task 1.3: Add Makefile with run/install/clean/help targets.
+- [x] Task 1.4: Add Makefile test target for /mnt/c/Users/jorkni/Downloads/test speed upper.mp4.
+- [x] Task 1.5: Add optional GPU acceleration (--gpu flag) for video encoding.
+- [x] Task 1.6: Add optional GPU-accelerated decoding (--gpu-decode flag, experimental, NVIDIA CUVID/NVDEC).
 
 **Phase 2: Silence Detection**
-- [ ] Task 2.1: Implement FFmpeg `silencedetect` execution function.
-- [ ] Task 2.2: Implement `silencedetect` output parsing logic.
+- [x] Task 2.1: Implement FFmpeg `silencedetect` execution function.
+- [x] Task 2.2: Implement `silencedetect` output parsing logic.
 
 **Phase 3: Video Processing Core Logic**
-- [ ] Task 3.1: Calculate non-silent and silent segment timestamps.
-- [ ] Task 3.2: Implement dynamic FFmpeg filtergraph generation.
-- [ ] Task 3.3: Implement main FFmpeg processing execution function.
+- [x] Task 3.1: Calculate non-silent and silent segment timestamps.
+- [x] Task 3.2: Implement dynamic FFmpeg filtergraph generation.
+- [x] Task 3.3: Implement main FFmpeg processing execution function.
 
 **Phase 4: Integration, Error Handling & Documentation**
-- [ ] Task 4.1: Integrate all components in `videospeeder.py`.
-- [ ] Task 4.2: Add basic error handling and user feedback.
-- [ ] Task 4.3: Create the initial `README.md`.
+- [x] Task 4.1: Integrate all components in `videospeeder.py`.
+- [x] Task 4.2: Add basic error handling and user feedback.
+- [x] Task 4.3: Implement progress reporting using `tqdm`.
+- [x] Task 4.4: Create the initial `README.md`.
 
 ---
 
@@ -118,5 +140,8 @@ The implementation is complete when:
 2.  The tool correctly identifies silent segments in a sample video based on the provided threshold and duration.
 3.  The tool generates an output video where silent segments are sped up by the specified factor.
 4.  The ">>" indicator is correctly displayed in the bottom-left corner during sped-up segments (unless disabled).
-5.  The tool handles basic errors gracefully (e.g., missing input file, FFmpeg not found).
-6.  The `README.md` provides clear instructions for installation and usage.
+5.  The tool displays clear progress information using `tqdm` during video processing.
+6.  The tool handles basic errors gracefully (e.g., missing input file, FFmpeg not found).
+7.  The `README.md` provides clear instructions for installation and usage.
+8.  The tool supports GPU acceleration for video encoding via the `--gpu` flag (NVIDIA NVENC).
+9.  The tool supports experimental GPU-accelerated decoding via the `--gpu-decode` flag (NVIDIA CUVID/NVDEC).

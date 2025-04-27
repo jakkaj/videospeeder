@@ -8,7 +8,7 @@
         "--rm",
         "--init",
         "-v",
-        "/workspaces/mcp-knowledge-graph-improved/.roo:/data",
+        "./.roo:/data",
         "jakkaj/mcp-knowledge-graph",
         "node",
         "dist/index.js",
@@ -38,7 +38,7 @@
         "-i",
         "--rm",
         "--env-file",
-        ".devcontainer/devcontainer.env",
+        "./.devcontainer/devcontainer.env",
         "ghcr.io/github/github-mcp-server"
       ],
       "env": {},

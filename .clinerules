@@ -1,7 +1,7 @@
 # Rules from .clinerules:
 # Rules from:
 
-- **Repository Info**: This project resides in the `jakkaj/mcp-knowledge-graph-improved` GitHub repository. Use this for relevant GitHub operations.
+- **Repository Info**: This project resides in the `jakkaj/videospeeder` GitHub repository. Use this for relevant GitHub operations.
 - General Rule: Always add debug output to tests if they are failing rather than guessing. Remember to clean up when it's working!
 - **IMPORTANT**: Specific tasks often have detailed guidelines linked below. YOU MUST CONSULT these guides when your task relates to the corresponding topic to ensure correctness and adherence to project standards.
 

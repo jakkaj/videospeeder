@@ -9,7 +9,7 @@
                 "--rm",
                 "--init",
                 "-v",
-                "/workspaces/mcp-knowledge-graph-improved/.roo:/data",
+                "./.roo:/data",
                 "jakkaj/mcp-knowledge-graph",
                 "node",
                 "dist/index.js",
@@ -25,10 +25,10 @@
                 "-i",
                 "--rm",
                 "--env-file",
-                "/workspaces/mcp-knowledge-graph-improved/.devcontainer/devcontainer.env",
+                "/home/jak/github/videospeeder/.devcontainer/devcontainer.env",
                 "ghcr.io/github/github-mcp-server"
             ],
             "env": {}
         }
-    }
+    },
 }
