@@ -177,3 +177,5 @@ devcontainer.env
 # Ignore test output video files
 videospeeder_project/output_test_segment.mp4
 videospeeder_project/output_test.mp4
+# Ignore generated VTT subtitle files
+videospeeder_project/*.vtt

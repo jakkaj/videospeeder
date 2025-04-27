@@ -39,7 +39,6 @@ python videospeeder.py --input INPUT.mp4 --output OUTPUT.mp4 [options]
 - `--output`, `-o`: Path to output video file (required)
 - `--threshold`, `-t`: Silence threshold in dB (default: -30.0)
 - `--duration`, `-d`: Minimum silence duration in seconds (default: 0.5)
-- `--speed`, `-s`: Speed-up factor for silent sections (default: 2.0)
 - `--indicator`: Show ">>" indicator during sped-up segments (flag)
 - `--gpu`: Enable GPU acceleration for video encoding (NVIDIA NVENC)
 - `--gpu-decode`: Enable GPU acceleration for video decoding (NVIDIA CUVID/NVDEC, experimental)
@@ -47,7 +46,7 @@ python videospeeder.py --input INPUT.mp4 --output OUTPUT.mp4 [options]
 ### Example
 
 ```bash
-python videospeeder.py -i input.mp4 -o output.mp4 -t -35 -d 0.7 -s 2.5 --indicator --gpu --gpu-decode
+python videospeeder.py -i input.mp4 -o output.mp4 -t -35 -d 0.7 --indicator --gpu --gpu-decode
 ```
 
 ## Makefile Usage
@@ -71,7 +70,7 @@ python videospeeder.py -i input.mp4 -o output.mp4 -t -35 -d 0.7 -s 2.5 --indicat
 2. Calculates silent and non-silent segments, including a 2-second buffer of normal speed before non-silent sections that follow silence.
 3. Builds a dynamic FFmpeg filtergraph to speed up silent segments and add indicators. The speedup logic is as follows:
     - **Short Silence (3-10 seconds):** Sped up by a fixed factor of **4x**.
-    - **Long Silence (> 10 seconds):** Sped up dynamically. The speed factor is calculated to make the resulting segment approximately **4 seconds** long. This speedup is capped at a maximum of **100x** for video (`setpts`) and uses chained `atempo` filters for audio to handle high speed factors.
+    - **Long Silence (> 10 seconds):** Sped up dynamically. The speed factor is calculated to make the resulting segment approximately **4 seconds** long. This speedup is capped at a maximum of **1000x** for video (`setpts`) and uses chained `atempo` filters for audio to handle high speed factors.
 4. Processes the video using the generated filtergraph and outputs the result, showing a progress bar.
 
 ## License

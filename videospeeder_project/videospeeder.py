@@ -97,10 +97,7 @@ def parse_args():
         "--duration", "-d", type=float, default=3,
         help="Minimum silence duration in seconds (default: 3)."
     )
-    parser.add_argument(
-        "--speed", "-s", type=float, default=200,
-        help="Speed-up factor for silent sections (default: 1000)."
-    )
+    # --speed argument removed as speed is now dynamic
     parser.add_argument(
         "--indicator", action="store_true",
         help="Show '>>' indicator during sped-up segments."
@@ -274,16 +271,15 @@ def calculate_segments(silence_intervals, video_duration, buffer_duration=2.0):
             i += 1
     return adjusted_segments
 
-def build_filtergraph(segments, speed, indicator, use_gpu_decode=False):
+def build_filtergraph(segments, indicator, use_gpu_decode=False):
     """
     Builds a dynamic FFmpeg filtergraph string for the given segments.
     - segments: list of (start, end, type)
-    - speed: speed-up factor for silent segments
     - indicator: bool, whether to add '>>' drawtext during silent segments
     - use_gpu_decode: bool, whether GPU decode is active (insert hwdownload/format if True)
     Returns: filtergraph string
     """
-    MAX_VIDEO_SPEED = 100.0  # Cap for setpts
+    MAX_VIDEO_SPEED = 1000.0 # Cap for setpts (Increased from 100.0)
     MAX_ATEMPO = 2.0         # FFmpeg atempo max per filter
     vf_parts = []
     af_parts = []
@@ -291,9 +287,7 @@ def build_filtergraph(segments, speed, indicator, use_gpu_decode=False):
     concat_a = []
     seg_idx = 0
 
-    # Warn if speed is above cap
-    if speed > MAX_VIDEO_SPEED:
-        print(f"[warning] Speedup factor {speed}x is too high. Capping to {MAX_VIDEO_SPEED}x for video segments.")
+    # Warning for high speed is implicitly handled by the MAX_VIDEO_SPEED cap now.
 
     for start, end, typ in segments:
         v_label = f"v{seg_idx}"
@@ -531,7 +525,6 @@ def main():
         # Task 3.2: Build FFmpeg filtergraph
         filtergraph = build_filtergraph(
             segments,
-            args.speed,
             args.indicator,
             use_gpu_decode=getattr(run_ffmpeg_processing, "use_gpu_decode", False)
         )
