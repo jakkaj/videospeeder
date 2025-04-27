@@ -94,8 +94,8 @@ def parse_args():
         help="Silence threshold in dB (default: -30.0)."
     )
     parser.add_argument(
-        "--duration", "-d", type=float, default=3,
-        help="Minimum silence duration in seconds (default: 3)."
+        "--duration", "-d", type=float, default=2,
+        help="Minimum silence duration in seconds (default: 2)."
     )
     # --speed argument removed as speed is now dynamic
     parser.add_argument(
@@ -335,7 +335,7 @@ def build_filtergraph(segments, indicator, use_gpu_decode=False, png_input_index
             vf_segment_chain += f";[{last_video_label}]hwdownload,format=yuv420p[{gpu_label}]"
             last_video_label = gpu_label
 
-        # 3. If silent, apply speedup and indicator
+        # 3. If silent, apply indicator and then speedup
         if typ == "silent":
             # Recalculate speed (needed for video_speed and text)
             segment_duration = end - start
@@ -348,34 +348,33 @@ def build_filtergraph(segments, indicator, use_gpu_decode=False, png_input_index
                 current_speed = max(1.0, segment_duration / target_duration)
             video_speed = min(current_speed, MAX_VIDEO_SPEED)
 
-            # 3a. Apply speed change (setpts)
-            spedup_label = f"spedup{seg_idx}"
-            vf_segment_chain += f";[{last_video_label}]setpts=PTS/{video_speed}[{spedup_label}]"
-            last_video_label = spedup_label
-
-            # 3b. Apply indicator if requested
+            # 3a. Apply indicator if requested (MOVED: now happens BEFORE speed change)
             if indicator:
                 box_label = f"box{seg_idx}"
                 overlay_label = f"ovl{seg_idx}"
+                text_label = f"txt{seg_idx}"
                 # Draw a semi-transparent black box first
                 # Position everything top-left
                 # y=10: Position box 10px from top edge
                 vf_segment_chain += f";[{last_video_label}]drawbox=x=10:y=10:w=400:h=220:color=black@0.5:t=fill[{box_label}]"
                 last_video_label = box_label # Output of drawbox is input for overlay
+                
                 # Chain overlay filter (takes 2 inputs: box stream and png input)
                 # Place overlay in top-left, on top of the box
                 vf_segment_chain += f";[{last_video_label}][{png_input_index}:v]overlay=x=10:y=10[{overlay_label}]"
                 last_video_label = overlay_label # Output of overlay is input for drawtext
+                
                 # Chain drawtext filter, place text right of icon, aligned near top, on top of the box
                 # x=10+w+10: Position text 10px right of the overlay icon (icon starts at x=10, width is 'w')
                 # y=10: Align text baseline near top
                 # Move text further right and down for better separation from icon
-                vf_segment_chain += f";[{last_video_label}]drawtext=text='{int(current_speed)}x':x=260:y=100:fontsize=60:fontcolor=white:borderw=4[{v_label}]"
-                last_video_label = v_label # Final label is v_label
-            else:
-                 # If silent but no indicator, alias last_video_label to v_label
-                 vf_segment_chain += f";[{last_video_label}]null[{v_label}]"
-                 last_video_label = v_label
+                vf_segment_chain += f";[{last_video_label}]drawtext=text='{int(current_speed)}x':x=260:y=100:fontsize=60:fontcolor=white:borderw=4[{text_label}]"
+                last_video_label = text_label # Output of drawtext is input for speed change
+            
+            # 3b. Apply speed change (setpts) AFTER overlays
+            spedup_label = f"spedup{seg_idx}"
+            vf_segment_chain += f";[{last_video_label}]setpts=PTS/{video_speed}[{v_label}]"
+            last_video_label = v_label # Final label is v_label
         else:
             # If not silent, alias last_video_label to v_label
             vf_segment_chain += f";[{last_video_label}]null[{v_label}]"
