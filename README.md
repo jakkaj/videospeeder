@@ -128,3 +128,4 @@ This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) f
 ## 🙌 Contributing
 
 Found a bug or have an idea? Feel free to open an issue on the GitHub repository!
+
