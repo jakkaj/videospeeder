@@ -477,19 +477,30 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
                 if not line:
                     break
                 if line.startswith("out_time_ms="):
-                    ms = int(line.strip().split("=")[1])
-                    seconds = ms / 1_000_000
-                    pbar.n = min(seconds, video_duration)
-                    pbar.refresh()
-                    last_time = seconds
+                    try:
+                        value = line.strip().split("=")[1]
+                        if value != "N/A":
+                            ms = int(value)
+                            seconds = ms / 1_000_000
+                            pbar.n = min(seconds, video_duration)
+                            pbar.refresh()
+                            last_time = seconds
+                    except (ValueError, IndexError):
+                        # Skip invalid progress lines
+                        pass
                 elif line.startswith("out_time="):
                     # Fallback: parse out_time=HH:MM:SS.micro
-                    t = line.strip().split("=")[1]
-                    h, m, s = t.split(":")
-                    seconds = int(h) * 3600 + int(m) * 60 + float(s)
-                    pbar.n = min(seconds, video_duration)
-                    pbar.refresh()
-                    last_time = seconds
+                    try:
+                        t = line.strip().split("=")[1]
+                        if t != "N/A":
+                            h, m, s = t.split(":")
+                            seconds = int(h) * 3600 + int(m) * 60 + float(s)
+                            pbar.n = min(seconds, video_duration)
+                            pbar.refresh()
+                            last_time = seconds
+                    except (ValueError, IndexError):
+                        # Skip invalid progress lines
+                        pass
             proc.wait()
             pbar.n = video_duration
             pbar.refresh()
