@@ -17,6 +17,7 @@ This tool intelligently analyzes your video, detects silent segments, and automa
 ## ✨ Key Features
 
 *   🤫 **Smart Silence Detection:** Uses `ffmpeg`'s powerful `silencedetect` filter to pinpoint moments without speech.
+*   🗣️ **Speech Detection (VAD):** Optional `--vad` mode uses **Silero VAD** to detect human speech vs keyboard/mouse/noise in screencasts.
 *   ⏩ **Dynamic Speed-Up:** Automatically calculates the optimal speed for silent parts, aiming for a concise ~4-second duration while capping at a blazing 1000x! Shorter silences get a fixed 4x boost.
 *   📊 **Rich CLI Stats:** Get beautifully formatted video stats upfront using `rich`.
 *   👁️ **Visual Speed Indicator:** Optional `>> [Speed]x` overlay shows exactly when the video is sped up.
@@ -34,6 +35,7 @@ This tool intelligently analyzes your video, detects silent segments, and automa
     ```bash
     pip install -r videospeeder_project/requirements.txt
     ```
+    *(Note: `--vad` requires installing PyTorch + Silero VAD; this can add significant install size.)*
 *   **(Optional) NVIDIA GPU & Drivers:** For GPU acceleration features.
 *   **(Optional) CUDA Toolkit:** Often needed for Whisper's GPU support during transcription.
 
@@ -72,6 +74,8 @@ python videospeeder.py --input <your_video.mp4> --output <output_video.mp4> [OPT
 *   `-o, --output`: Path for the processed output video file (Required).
 *   `-t, --threshold`: Silence threshold in dB (Default: -30.0). Lower values detect quieter sounds as silence.
 *   `-d, --duration`: Minimum duration of silence in seconds to be sped up (Default: 2.0).
+*   `--vad`: Use Voice Activity Detection (Silero VAD) to detect speech vs non-speech (keyboard/mouse/noise).
+*   `--vad-threshold`: Speech probability threshold in `[0.0, 1.0]` (Default: `0.75`). Higher rejects more keyboard noise.
 *   `--indicator`: Show the `>> [Speed]x` overlay during sped-up parts.
 *   `--gpu`: Enable NVIDIA NVENC GPU *encoding*.
 *   `--gpu-decode`: Enable NVIDIA CUVID/NVDEC GPU *decoding* (Experimental).
@@ -86,7 +90,17 @@ python videospeeder.py -i my_recording.mp4 -o my_recording_fast.mp4 --indicator
 
 # Process using GPU acceleration and a stricter silence threshold
 python videospeeder.py -i lecture.mp4 -o lecture_fast.mp4 -t -40 --gpu --gpu-decode
+
+# Screencast-friendly speech detection (VAD) to ignore typing noise
+python videospeeder.py -i screencast.mp4 -o screencast_fast.mp4 --vad
+
+# Tune VAD sensitivity for very keyboard-heavy audio
+python videospeeder.py -i screencast.mp4 -o screencast_fast.mp4 --vad --vad-threshold 0.80
 ```
+
+**Offline note for `--vad`:**
+- Silero VAD may download/cache model assets on first use. If you're offline, run once while online or preload
+  the model in your environment before using `--vad` without network.
 
 ### 2. Transcribing Videos/Audio (`transcribe.py`)
 
@@ -128,4 +142,3 @@ This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) f
 ## 🙌 Contributing
 
 Found a bug or have an idea? Feel free to open an issue on the GitHub repository!
-

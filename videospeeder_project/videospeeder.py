@@ -5,12 +5,21 @@ import os
 import shutil
 import sys
 
-from tqdm import tqdm
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.text import Text
-from rich import box
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover
+    tqdm = None
+
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich import box
+except ImportError:  # pragma: no cover
+    Console = None
+    Table = None
+    Panel = None
+    box = None
 
 def probe_and_print_video_stats(input_file):
     """
@@ -18,6 +27,10 @@ def probe_and_print_video_stats(input_file):
     """
     import subprocess
     import json
+
+    if Console is None or Table is None or Panel is None or box is None:
+        print("[warn] rich is not installed; skipping formatted input stats.")
+        return
 
     console = Console()
     # ffprobe command to get video and audio stream info
@@ -97,6 +110,22 @@ def parse_args():
         "--duration", "-d", type=float, default=2,
         help="Minimum silence duration in seconds (default: 2)."
     )
+    def _float_0_1(value):
+        try:
+            parsed = float(value)
+        except ValueError as e:
+            raise argparse.ArgumentTypeError(str(e))
+        if parsed < 0.0 or parsed > 1.0:
+            raise argparse.ArgumentTypeError("must be between 0.0 and 1.0")
+        return parsed
+    parser.add_argument(
+        "--vad", action="store_true",
+        help="Use Voice Activity Detection (Silero VAD) to detect speech vs non-speech (keyboard/mouse/noise)."
+    )
+    parser.add_argument(
+        "--vad-threshold", type=_float_0_1, default=0.75,
+        help="VAD speech probability threshold in [0.0, 1.0] (default: 0.75). Higher rejects more keyboard noise."
+    )
     # --speed argument removed as speed is now dynamic
     parser.add_argument(
         "--indicator", action="store_true",
@@ -119,6 +148,32 @@ def parse_args():
         help="Duration to process in seconds (default: entire file)."
     )
     return parser.parse_args()
+
+def import_vad_dependencies():
+    """
+    Import VAD dependencies lazily (only when --vad is used) and provide actionable error messaging.
+    """
+    try:
+        import torch  # type: ignore
+    except ImportError as e:
+        raise RuntimeError(
+            "VAD mode requires additional dependencies.\n"
+            "Install them with:\n"
+            "  pip install -r /Users/jordanknight/github/videospeeder/videospeeder_project/requirements.txt\n"
+            "Required packages: torch, torchaudio, silero-vad\n"
+            "Note: PyTorch installs can be large."
+        ) from e
+
+    try:
+        from silero_vad import load_silero_vad, get_speech_timestamps  # type: ignore
+    except ImportError as e:
+        raise RuntimeError(
+            "VAD mode requires the 'silero-vad' package.\n"
+            "Install dependencies with:\n"
+            "  pip install -r /Users/jordanknight/github/videospeeder/videospeeder_project/requirements.txt"
+        ) from e
+
+    return torch, load_silero_vad, get_speech_timestamps
 
 def get_video_duration(input_file):
     """
@@ -219,6 +274,334 @@ def parse_silencedetect_output(stderr):
         intervals.append((start, end))
     return intervals
 
+def extract_audio_pcm_s16le(input_file, offset=0.0, process_duration=None, sample_rate=16000):
+    """
+    Extract 16-bit mono PCM (s16le) audio via FFmpeg pipe for VAD processing.
+
+    Returned audio is raw bytes (little-endian int16 samples).
+    Timestamps produced by downstream processing are relative to the extracted region, starting at 0.
+    """
+    cmd = ["ffmpeg", "-hide_banner"]
+    if offset and offset > 0:
+        cmd += ["-ss", str(offset)]
+    cmd += ["-i", input_file]
+    if process_duration:
+        cmd += ["-t", str(process_duration)]
+    cmd += [
+        "-map", "0:a:0",
+        "-vn",
+        "-acodec", "pcm_s16le",
+        "-ar", str(sample_rate),
+        "-ac", "1",
+        "-f", "s16le",
+        "-loglevel", "error",
+        "pipe:1",
+    ]
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    audio_bytes, stderr_bytes = proc.communicate()
+    if proc.returncode != 0:
+        stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+        raise RuntimeError(f"FFmpeg audio extraction failed:\n{stderr_text}".rstrip())
+    if not audio_bytes:
+        raise RuntimeError(
+            "FFmpeg returned no audio data. Input may have no audio stream (or audio is unsupported)."
+        )
+    return audio_bytes
+
+def pcm_s16le_bytes_to_float_tensor(audio_bytes, torch):
+    """
+    Convert s16le PCM bytes into a 1D float32 torch tensor normalized to ~[-1.0, 1.0].
+    """
+    from array import array
+
+    if not audio_bytes:
+        raise ValueError("audio_bytes is empty")
+    if len(audio_bytes) % 2 != 0:
+        audio_bytes = audio_bytes[:-1]
+    samples = array("h")
+    samples.frombytes(audio_bytes)
+    if len(samples) == 0:
+        raise ValueError("no samples decoded from audio_bytes")
+    return torch.tensor(samples, dtype=torch.float32) / 32768.0
+
+def stream_audio_pcm_s16le_chunks(
+    input_file,
+    offset=0.0,
+    process_duration=None,
+    sample_rate=16000,
+    chunk_seconds=30.0,
+):
+    """
+    Stream s16le PCM audio from FFmpeg in fixed-size chunks to avoid loading the entire audio into memory.
+
+    Yields: raw PCM bytes (little-endian int16), sized to approximately `chunk_seconds` per yield.
+    """
+    import threading
+
+    if chunk_seconds <= 0:
+        raise ValueError("chunk_seconds must be > 0")
+
+    chunk_samples = int(sample_rate * chunk_seconds)
+    bytes_per_chunk = chunk_samples * 2
+
+    cmd = ["ffmpeg", "-hide_banner"]
+    if offset and offset > 0:
+        cmd += ["-ss", str(offset)]
+    cmd += ["-i", input_file]
+    if process_duration:
+        cmd += ["-t", str(process_duration)]
+    cmd += [
+        "-map", "0:a:0",
+        "-vn",
+        "-acodec", "pcm_s16le",
+        "-ar", str(sample_rate),
+        "-ac", "1",
+        "-f", "s16le",
+        "-loglevel", "error",
+        "pipe:1",
+    ]
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=max(1024 * 1024, bytes_per_chunk * 2),
+    )
+
+    stderr_chunks = []
+
+    def _drain_stderr():
+        if proc.stderr is None:
+            return
+        while True:
+            chunk = proc.stderr.read(1024 * 16)
+            if not chunk:
+                break
+            stderr_chunks.append(chunk)
+
+    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    stderr_thread.start()
+
+    if proc.stdout is None:
+        proc.kill()
+        stderr_thread.join(timeout=1)
+        raise RuntimeError("Failed to open FFmpeg stdout for PCM streaming.")
+
+    try:
+        while True:
+            data = proc.stdout.read(bytes_per_chunk)
+            if not data:
+                break
+            yield data
+    finally:
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+        proc.wait()
+        stderr_thread.join(timeout=1)
+
+    if proc.returncode != 0:
+        stderr_text = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+        raise RuntimeError(f"FFmpeg audio streaming failed:\n{stderr_text}".rstrip())
+
+def detect_speech_segments_silero(
+    input_file,
+    vad_threshold,
+    offset=0.0,
+    process_duration=None,
+    sample_rate=16000,
+    chunk_seconds=30.0,
+    overlap_seconds=1.0,
+    min_speech_duration_ms=200,
+    min_silence_duration_ms=100,
+    speech_pad_ms=50,
+):
+    """
+    Detect speech segments in the input using Silero VAD.
+
+    Returns list of (start_seconds, end_seconds) tuples, relative to the processed region starting at 0.
+    """
+    torch, load_silero_vad, get_speech_timestamps = import_vad_dependencies()
+
+    if overlap_seconds < 0:
+        raise ValueError("overlap_seconds must be >= 0")
+    overlap_samples = int(overlap_seconds * sample_rate)
+    overlap_bytes = overlap_samples * 2
+
+    torch.set_num_threads(1)
+    try:
+        model = load_silero_vad()
+    except Exception as e:
+        raise RuntimeError(
+            "Failed to load Silero VAD model. This may require network access on first run. "
+            "See README for offline notes."
+        ) from e
+
+    all_segments = []
+    time_offset_seconds = 0.0
+    tail_bytes = b""
+    carry_byte = b""
+
+    for chunk_bytes in stream_audio_pcm_s16le_chunks(
+        input_file,
+        offset=offset,
+        process_duration=process_duration,
+        sample_rate=sample_rate,
+        chunk_seconds=chunk_seconds,
+    ):
+        if carry_byte:
+            chunk_bytes = carry_byte + chunk_bytes
+            carry_byte = b""
+        if len(chunk_bytes) % 2 != 0:
+            carry_byte = chunk_bytes[-1:]
+            chunk_bytes = chunk_bytes[:-1]
+
+        combined = tail_bytes + chunk_bytes
+        if len(combined) % 2 != 0:
+            combined = combined[:-1]
+
+        combined_seconds = (len(combined) / 2) / sample_rate
+        tail_seconds = (len(tail_bytes) / 2) / sample_rate
+        chunk_start_seconds = max(0.0, time_offset_seconds - tail_seconds)
+
+        audio_tensor = pcm_s16le_bytes_to_float_tensor(combined, torch)
+        speech_timestamps = get_speech_timestamps(
+            audio_tensor,
+            model,
+            threshold=vad_threshold,
+            sampling_rate=sample_rate,
+            min_speech_duration_ms=min_speech_duration_ms,
+            min_silence_duration_ms=min_silence_duration_ms,
+            speech_pad_ms=speech_pad_ms,
+            return_seconds=True,
+        )
+
+        for ts in speech_timestamps:
+            start = float(ts["start"]) + chunk_start_seconds
+            end = float(ts["end"]) + chunk_start_seconds
+            all_segments.append((start, end))
+
+        if overlap_bytes > 0:
+            tail_bytes = combined[-overlap_bytes:] if len(combined) > overlap_bytes else combined
+        else:
+            tail_bytes = b""
+
+        time_offset_seconds += (len(chunk_bytes) / 2) / sample_rate
+
+    if carry_byte:
+        # Unpaired last byte shouldn't happen, but avoid silent corruption.
+        raise RuntimeError("PCM stream ended on an odd byte boundary.")
+
+    return all_segments
+
+def normalize_speech_segments(
+    speech_segments,
+    max_end,
+    merge_gap_seconds=0.3,
+    pad_seconds=0.05,
+    merge_tolerance_seconds=0.1,
+):
+    """
+    Merge, pad, and clamp speech segments to reduce fragmentation and avoid boundary clipping.
+    """
+    if max_end < 0:
+        raise ValueError("max_end must be >= 0")
+
+    cleaned = []
+    for start, end in speech_segments:
+        try:
+            start_f = float(start)
+            end_f = float(end)
+        except (TypeError, ValueError):
+            continue
+        if end_f <= start_f:
+            continue
+        cleaned.append((start_f, end_f))
+
+    if not cleaned:
+        return []
+
+    cleaned.sort(key=lambda x: x[0])
+
+    # Merge segments that overlap or are separated by a small gap.
+    merged = [cleaned[0]]
+    for start, end in cleaned[1:]:
+        last_start, last_end = merged[-1]
+        gap = start - last_end
+        if gap <= merge_gap_seconds:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+
+    # Pad and clamp.
+    padded = []
+    for start, end in merged:
+        padded_start = max(0.0, start - pad_seconds)
+        padded_end = min(max_end, end + pad_seconds)
+        if padded_end > padded_start:
+            padded.append((padded_start, padded_end))
+
+    if not padded:
+        return []
+
+    # Merge again after padding to remove overlaps.
+    padded.sort(key=lambda x: x[0])
+    final = [padded[0]]
+    for start, end in padded[1:]:
+        last_start, last_end = final[-1]
+        if start <= last_end + merge_tolerance_seconds:
+            final[-1] = (last_start, max(last_end, end))
+        else:
+            final.append((start, end))
+
+    return final
+
+def speech_segments_to_silence_intervals(speech_segments, total_duration):
+    """
+    Convert speech segments into non-speech ("silence") intervals for the existing pipeline.
+
+    - If no speech is detected: returns [(0, total_duration)] (all silence / all sped-up).
+    - If speech covers entire duration: returns [] (no silence to speed up).
+    """
+    if total_duration < 0:
+        raise ValueError("total_duration must be >= 0")
+
+    if not speech_segments:
+        return [(0.0, float(total_duration))]
+
+    intervals = []
+    prev_end = 0.0
+    for start, end in speech_segments:
+        if start > prev_end:
+            intervals.append((prev_end, start))
+        prev_end = max(prev_end, end)
+
+    if prev_end < total_duration:
+        intervals.append((prev_end, float(total_duration)))
+
+    # If speech starts at 0 and runs through end, there will be no intervals (correct).
+    return intervals
+
+def validate_silence_intervals(silence_intervals, max_end):
+    """
+    Validate silence intervals are ordered, non-negative, and within [0, max_end].
+    """
+    prev_end = 0.0
+    for idx, (start, end) in enumerate(silence_intervals):
+        if start is None or end is None:
+            raise ValueError(f"silence interval {idx} has open-ended bound (start={start}, end={end})")
+        if start < 0 or end < 0:
+            raise ValueError(f"silence interval {idx} is negative: ({start}, {end})")
+        if end < start:
+            raise ValueError(f"silence interval {idx} has end < start: ({start}, {end})")
+        if start < prev_end:
+            raise ValueError(f"silence interval {idx} overlaps or is unsorted: ({start}, {end})")
+        if end > max_end + 1e-6:
+            raise ValueError(f"silence interval {idx} exceeds max_end={max_end}: ({start}, {end})")
+        prev_end = end
+
 def calculate_segments(silence_intervals, video_duration, buffer_duration=1.0):
     """
     Given silence intervals and total duration, returns a list of segments:
@@ -317,6 +700,8 @@ def build_filtergraph(segments, indicator, use_gpu_decode=False, png_input_index
                     atempo_chain.append(f"atempo={final_atempo:.2f}")
             if atempo_chain:
                 af += "," + ",".join(atempo_chain)
+            # Keep A/V durations aligned (still apply atempo), but mute audio during sped-up segments.
+            af += ",volume=0"
         af += f"[{a_label}]"
         af_parts.append(af)
 
@@ -468,42 +853,52 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
     print("Running FFmpeg processing command:")
     print(" ".join(cmd))
     try:
-        from tqdm import tqdm
-        with tqdm(total=video_duration, unit="s", desc="Processing", dynamic_ncols=True) as pbar:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
-            last_time = 0.0
+        if tqdm is None:
+            print("[warn] tqdm is not installed; running without progress bar.")
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1
+            )
             while True:
                 line = proc.stdout.readline()
                 if not line:
                     break
-                if line.startswith("out_time_ms="):
-                    try:
-                        value = line.strip().split("=")[1]
-                        if value != "N/A":
-                            ms = int(value)
-                            seconds = ms / 1_000_000
-                            pbar.n = min(seconds, video_duration)
-                            pbar.refresh()
-                            last_time = seconds
-                    except (ValueError, IndexError):
-                        # Skip invalid progress lines
-                        pass
-                elif line.startswith("out_time="):
-                    # Fallback: parse out_time=HH:MM:SS.micro
-                    try:
-                        t = line.strip().split("=")[1]
-                        if t != "N/A":
-                            h, m, s = t.split(":")
-                            seconds = int(h) * 3600 + int(m) * 60 + float(s)
-                            pbar.n = min(seconds, video_duration)
-                            pbar.refresh()
-                            last_time = seconds
-                    except (ValueError, IndexError):
-                        # Skip invalid progress lines
-                        pass
+                if line.startswith("out_time_ms=") or line.startswith("out_time="):
+                    print(line.strip())
             proc.wait()
-            pbar.n = video_duration
-            pbar.refresh()
+        else:
+            with tqdm(total=video_duration, unit="s", desc="Processing", dynamic_ncols=True) as pbar:
+                proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1
+                )
+                while True:
+                    line = proc.stdout.readline()
+                    if not line:
+                        break
+                    if line.startswith("out_time_ms="):
+                        try:
+                            value = line.strip().split("=")[1]
+                            if value != "N/A":
+                                ms = int(value)
+                                seconds = ms / 1_000_000
+                                pbar.n = min(seconds, video_duration)
+                                pbar.refresh()
+                        except (ValueError, IndexError):
+                            pass
+                    elif line.startswith("out_time="):
+                        try:
+                            t = line.strip().split("=")[1]
+                            if t != "N/A":
+                                h, m, s = t.split(":")
+                                seconds = int(h) * 3600 + int(m) * 60 + float(s)
+                                pbar.n = min(seconds, video_duration)
+                                pbar.refresh()
+                        except (ValueError, IndexError):
+                            pass
+
+                proc.wait()
+                pbar.n = video_duration
+                pbar.refresh()
+
         if proc.returncode == 0:
             print("FFmpeg processing completed successfully.")
         else:
@@ -533,6 +928,8 @@ def main():
     print(f"[DEBUG] Probing input file: {args.input}")
     probe_and_print_video_stats(args.input)
 
+    png_path = os.path.join(os.path.dirname(__file__), "fastforward.png")
+
     # Error handling: Check for ffmpeg and ffprobe
     if shutil.which("ffmpeg") is None:
         print("[DEBUG] ffmpeg not found in PATH.")
@@ -551,29 +948,62 @@ def main():
         print(f"[DEBUG] Input file exists: {args.input}")
 
     try:
-        # Task 2.1: Run silencedetect and print stderr
-        print("\nRunning FFmpeg silencedetect...")
-        silencedetect_stderr = run_silencedetect(
-            args.input, args.threshold, args.duration, offset=args.offset, process_duration=args.process_duration
-        )
-        print("FFmpeg silencedetect output:")
-        print(silencedetect_stderr)
-
-        # Task 2.2: Parse silencedetect output
-        silence_intervals = parse_silencedetect_output(silencedetect_stderr)
-        print("Parsed silence intervals (start, end):")
-        for interval in silence_intervals:
-            print(interval)
-
-        # Task 3.1: Get video duration and calculate segments
-        # If process_duration is set, use it; otherwise, use the full video duration minus offset
+        # Determine processing duration.
+        # If process_duration is set, use it; otherwise, use the full video duration minus offset.
         if args.process_duration:
             video_duration = args.process_duration
         else:
             full_duration = get_video_duration(args.input)
             video_duration = max(0, full_duration - args.offset)
         print(f"Processing duration: {video_duration:.2f} seconds (offset: {args.offset})")
-        # Adjust silence intervals and segments to be relative to offset
+
+        if args.vad:
+            print(f"\nUsing VAD (Silero) threshold={args.vad_threshold}")
+            try:
+                speech_segments_raw = detect_speech_segments_silero(
+                    args.input,
+                    vad_threshold=args.vad_threshold,
+                    offset=args.offset,
+                    process_duration=args.process_duration,
+                )
+            except RuntimeError as e:
+                print(str(e), file=sys.stderr)
+                sys.exit(1)
+            speech_segments = normalize_speech_segments(
+                speech_segments_raw,
+                max_end=video_duration,
+            )
+            silence_intervals = speech_segments_to_silence_intervals(
+                speech_segments, total_duration=video_duration
+            )
+            try:
+                validate_silence_intervals(silence_intervals, max_end=video_duration)
+            except ValueError as e:
+                print(f"Invalid VAD-derived silence intervals: {e}", file=sys.stderr)
+                sys.exit(1)
+            print("VAD-derived silence intervals (start, end):")
+            for interval in silence_intervals:
+                print(interval)
+        else:
+            # Task 2.1: Run silencedetect and print stderr
+            print("\nRunning FFmpeg silencedetect...")
+            silencedetect_stderr = run_silencedetect(
+                args.input,
+                args.threshold,
+                args.duration,
+                offset=args.offset,
+                process_duration=args.process_duration,
+            )
+            print("FFmpeg silencedetect output:")
+            print(silencedetect_stderr)
+
+            # Task 2.2: Parse silencedetect output
+            silence_intervals = parse_silencedetect_output(silencedetect_stderr)
+            print("Parsed silence intervals (start, end):")
+            for interval in silence_intervals:
+                print(interval)
+
+        # Silence intervals and segments are relative to the processed region (start at 0).
         segments = calculate_segments(silence_intervals, video_duration)
         print("Segments (start, end, type):")
         for seg in segments:
@@ -588,7 +1018,7 @@ def main():
             args.indicator,
             use_gpu_decode=getattr(run_ffmpeg_processing, "use_gpu_decode", False),
             png_input_index=1,
-            png_path="fastforward.png"
+            png_path=png_path
         )
         print("Generated FFmpeg filtergraph:")
         print(filtergraph)
@@ -607,7 +1037,7 @@ def main():
             use_gpu=args.gpu,
             offset=args.offset,
             process_duration=args.process_duration,
-            png_path="fastforward.png"
+            png_path=png_path
         )
     except Exception as e:
         print(f"[DEBUG] Exception occurred in main(): {e}")
