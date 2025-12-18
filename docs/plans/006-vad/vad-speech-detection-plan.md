@@ -157,21 +157,21 @@ segment/filtergraph pipeline with compatible silence intervals.
 
 | Status | ID | Task | CS | Type | Dependencies | Absolute Path(s) | Validation | Notes |
 |--------|-----|------|----|------|--------------|------------------|------------|-------|
-| [x] | T001 | Add CLI flags `--vad` and `--vad-threshold` | CS-2 | Core | – | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | `--help` shows new flags; default threshold is `0.75` | Keep existing `--threshold/--duration` semantics for `silencedetect` |
-| [x] | T002 | Add VAD deps to requirements | CS-2 | Setup | – | `/Users/jordanknight/github/videospeeder/videospeeder_project/requirements.txt` | Dependency install succeeds in a clean venv | Add `torch`, `torchaudio`, `silero-vad` only (ONNX deferred) |
-| [x] | T003 | Implement VAD dependency probe + actionable error | CS-2 | Core | T001 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Running with `--vad` and missing deps exits non-zero with install guidance | Lazy import `silero_vad` and `torch` only when `--vad` is used |
-| [x] | T004 | Implement FFmpeg audio extraction to PCM via pipe | CS-3 | Core | T001 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Extracted bytes are non-empty for typical inputs; errors for missing audio stream | Apply `--offset` and `--process-duration` consistently (Finding 01) |
-| [x] | T005 | Convert PCM bytes to normalized torch tensor | CS-2 | Core | T004, T002 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Tensor is 1-D float with expected range; length matches extracted PCM | Prefer stdlib conversion (avoid introducing `numpy`) |
-| [x] | T006 | Add streaming PCM reader for large inputs | CS-3 | Core | T004, T005 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Does not require full-audio buffering; emits sequential chunks | Use `chunk_samples` constant; keep timestamps continuous |
-| [x] | T007 | Detect speech segments with Silero (`return_seconds=True`) | CS-3 | Core | T006, T003 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Returns ordered `[(start,end), ...]` speech segments relative to processed region | Set `sampling_rate=16000`; thread count conservative |
-| [x] | T008 | Post-process speech segments (merge/pad/clamp) | CS-3 | Core | T007 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Output is sorted, non-overlapping, and clamped within `[0, video_duration]` | Merge adjacency to reduce fragmentation (Finding 05, 10, 11) |
-| [x] | T009 | Convert speech segments → silence intervals | CS-2 | Core | T008 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Silence intervals cover non-speech portions without overlap; handles no-speech/all-speech | Must preserve `calculate_segments()` invariants (Finding 17) |
-| [x] | T010 | Integrate VAD branch into `main()` | CS-3 | Core | T009 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | With `--vad`, code does not call `run_silencedetect()`; without `--vad`, behavior unchanged | Print a single status line indicating detector and threshold |
-| [x] | T011 | Add interval sanity-check before filtergraph build | CS-2 | Safety | T010 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Invalid intervals cause clear failure before FFmpeg invocation | Guard against negative, unsorted, or out-of-range intervals |
-| [x] | T012 | Update README for `--vad` and tuning | CS-2 | Docs | T001, T002 | `/Users/jordanknight/github/videospeeder/README.md` | README documents new flags, tuning, deps, and offline notes | Docs strategy is README-only (per spec) |
-| [x] | T013 | Manual validation: baseline vs VAD on screencast | CS-2 | Test | T010 | N/A (manual run) | Run commands in “Manual Validation Commands”; outputs created; checklist passes | Requires a representative input asset (see “Manual Validation Commands”) |
-| [x] | T014 | Manual validation: dependency-missing path | CS-1 | Test | T003 | N/A (manual run) | Run commands in “Manual Validation Commands”; exits non-zero with required message | Simulate missing deps via clean venv or uninstall |
-| [x] | T015 | Manual validation: `--indicator` with `--vad` | CS-1 | Test | T010 | N/A (manual run) | Run commands in “Manual Validation Commands”; overlay visible during sped-up segments | Confirms overlay pipeline is unaffected |
+| [x] | T001 | Add CLI flags `--vad` and `--vad-threshold` | CS-2 | Core | – | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | `--help` shows new flags; default threshold is `0.75` | Keep existing `--threshold/--duration` semantics for `silencedetect` · log#task-t001-add-cli-flags [^1] |
+| [x] | T002 | Add VAD deps to requirements | CS-2 | Setup | – | `/Users/jordanknight/github/videospeeder/videospeeder_project/requirements.txt` | Dependency install succeeds in a clean venv | Add `torch`, `torchaudio`, `silero-vad` only (ONNX deferred) · log#task-t002-add-vad-deps [^2] |
+| [x] | T003 | Implement VAD dependency probe + actionable error | CS-2 | Core | T001 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Running with `--vad` and missing deps exits non-zero with install guidance | Lazy import `silero_vad` and `torch` only when `--vad` is used · log#task-t003-vad-dep-probe [^3] |
+| [x] | T004 | Implement FFmpeg audio extraction to PCM via pipe | CS-3 | Core | T001 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Extracted bytes are non-empty for typical inputs; errors for missing audio stream | Apply `--offset` and `--process-duration` consistently (Finding 01) · log#task-t004-ffmpeg-pcm-extraction [^4] |
+| [x] | T005 | Convert PCM bytes to normalized torch tensor | CS-2 | Core | T004, T002 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Tensor is 1-D float with expected range; length matches extracted PCM | Prefer stdlib conversion (avoid introducing `numpy`) · log#task-t005-pcm-to-tensor [^5] |
+| [x] | T006 | Add streaming PCM reader for large inputs | CS-3 | Core | T004, T005 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Does not require full-audio buffering; emits sequential chunks | Use `chunk_samples` constant; keep timestamps continuous · log#task-t006-streaming-pcm [^6] |
+| [x] | T007 | Detect speech segments with Silero (`return_seconds=True`) | CS-3 | Core | T006, T003 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Returns ordered `[(start,end), ...]` speech segments relative to processed region | Set `sampling_rate=16000`; thread count conservative · log#task-t007-silero-speech-detection [^7] |
+| [x] | T008 | Post-process speech segments (merge/pad/clamp) | CS-3 | Core | T007 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Output is sorted, non-overlapping, and clamped within `[0, video_duration]` | Merge adjacency to reduce fragmentation (Finding 05, 10, 11) · log#task-t008-postprocess-speech [^8] |
+| [x] | T009 | Convert speech segments → silence intervals | CS-2 | Core | T008 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Silence intervals cover non-speech portions without overlap; handles no-speech/all-speech | Must preserve `calculate_segments()` invariants (Finding 17) · log#task-t009-speech-to-silence [^9] |
+| [x] | T010 | Integrate VAD branch into `main()` | CS-3 | Core | T009 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | With `--vad`, code does not call `run_silencedetect()`; without `--vad`, behavior unchanged | Print a single status line indicating detector and threshold · log#task-t010-integrate-main [^10] |
+| [x] | T011 | Add interval sanity-check before filtergraph build | CS-2 | Safety | T010 | `/Users/jordanknight/github/videospeeder/videospeeder_project/videospeeder.py` | Invalid intervals cause clear failure before FFmpeg invocation | Guard against negative, unsorted, or out-of-range intervals · log#task-t011-interval-sanity-check [^11] |
+| [x] | T012 | Update README for `--vad` and tuning | CS-2 | Docs | T001, T002 | `/Users/jordanknight/github/videospeeder/README.md` | README documents new flags, tuning, deps, and offline notes | Docs strategy is README-only (per spec) · log#task-t012-readme [^12] |
+| [x] | T013 | Manual validation: baseline vs VAD on screencast | CS-2 | Test | T010 | N/A (manual run) | Run commands in “Manual Validation Commands”; outputs created; checklist passes | Requires a representative input asset (see “Manual Validation Commands”) · log#task-t013-manual-baseline-vad [^13] |
+| [x] | T014 | Manual validation: dependency-missing path | CS-1 | Test | T003 | N/A (manual run) | Run commands in “Manual Validation Commands”; exits non-zero with required message | Simulate missing deps via clean venv or uninstall · log#task-t014-manual-missing-deps [^14] |
+| [x] | T015 | Manual validation: `--indicator` with `--vad` | CS-1 | Test | T010 | N/A (manual run) | Run commands in “Manual Validation Commands”; overlay visible during sped-up segments | Confirms overlay pipeline is unaffected · log#task-t015-manual-indicator [^15] |
 
 ### Architecture Map (Single Phase)
 
@@ -348,9 +348,52 @@ This plan is complete. Next step is `/plan-4-complete-the-plan` before creating 
 
 ## Change Footnotes Ledger
 
-[^1]: [To be added during implementation via plan-6a]
-[^2]: [To be added during implementation via plan-6a]
-[^3]: [To be added during implementation via plan-6a]
+[^1]: Task T001 - CLI flags and dependency-tolerant imports
+  - `function:videospeeder_project/videospeeder.py:parse_args`
+  - `function:videospeeder_project/videospeeder.py:probe_and_print_video_stats`
+
+[^2]: Task T002 - Add VAD dependencies
+  - `file:videospeeder_project/requirements.txt`
+
+[^3]: Task T003 - Lazy VAD dependency import and UX
+  - `function:videospeeder_project/videospeeder.py:import_vad_dependencies`
+
+[^4]: Task T004 - FFmpeg audio extraction (PCM pipe)
+  - `function:videospeeder_project/videospeeder.py:extract_audio_pcm_s16le`
+
+[^5]: Task T005 - PCM bytes to torch tensor
+  - `function:videospeeder_project/videospeeder.py:pcm_s16le_bytes_to_float_tensor`
+
+[^6]: Task T006 - Streaming PCM reader
+  - `function:videospeeder_project/videospeeder.py:stream_audio_pcm_s16le_chunks`
+
+[^7]: Task T007 - Silero speech detection
+  - `function:videospeeder_project/videospeeder.py:detect_speech_segments_silero`
+
+[^8]: Task T008 - Speech segment post-processing
+  - `function:videospeeder_project/videospeeder.py:normalize_speech_segments`
+
+[^9]: Task T009 - Speech to silence conversion
+  - `function:videospeeder_project/videospeeder.py:speech_segments_to_silence_intervals`
+
+[^10]: Task T010 - Integrate VAD into main pipeline + support assets
+  - `function:videospeeder_project/videospeeder.py:main`
+  - `file:videospeeder_project/fastforward.png`
+
+[^11]: Task T011 - Silence interval validation
+  - `function:videospeeder_project/videospeeder.py:validate_silence_intervals`
+
+[^12]: Task T012 - README updates for VAD
+  - `file:README.md`
+
+[^13]: Task T013 - Manual validation runbook + evidence
+  - `file:docs/plans/006-vad/execution.log.md`
+
+[^14]: Task T014 - Missing-deps validation evidence
+  - `file:docs/plans/006-vad/execution.log.md`
+
+[^15]: Task T015 - Indicator+VAD validation evidence
+  - `file:docs/plans/006-vad/execution.log.md`
 
 ---
 

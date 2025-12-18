@@ -147,7 +147,19 @@ def parse_args():
         "--process-duration", type=float, default=None,
         help="Duration to process in seconds (default: entire file)."
     )
+    parser.add_argument(
+        "--debug-segments", action="store_true",
+        help="Print computed segments with speed/output timing details (useful for diagnosing slow sections)."
+    )
     return parser.parse_args()
+
+def compute_silent_speed(segment_duration):
+    target_duration = 4.0
+    min_duration_for_variable_speed = 10.0
+    fixed_speed_short = 4.0
+    if segment_duration <= min_duration_for_variable_speed:
+        return fixed_speed_short
+    return max(1.0, segment_duration / target_duration)
 
 def import_vad_dependencies():
     """
@@ -680,15 +692,7 @@ def build_filtergraph(segments, indicator, use_gpu_decode=False, png_input_index
         af = f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS"
         if typ == "silent":
             segment_duration = end - start
-            target_duration = 4.0
-            min_duration_for_variable_speed = 10.0
-            fixed_speed_short = 4.0
-            if segment_duration <= min_duration_for_variable_speed:
-                current_speed = fixed_speed_short
-            else:
-                current_speed = max(1.0, segment_duration / target_duration)
-
-            audio_speed = current_speed
+            audio_speed = compute_silent_speed(segment_duration)
             remain = audio_speed
             atempo_chain = []
             while remain > MAX_ATEMPO:
@@ -853,6 +857,46 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
     print("Running FFmpeg processing command:")
     print(" ".join(cmd))
     try:
+        progress_segments = getattr(run_ffmpeg_processing, "progress_segments", None)
+        progress_map = None
+        progress_map_index = 0
+        if progress_segments:
+            out_cursor = 0.0
+            progress_map = []
+            for seg_start, seg_end, seg_type in progress_segments:
+                seg_start = float(seg_start)
+                seg_end = float(seg_end)
+                in_duration = max(0.0, seg_end - seg_start)
+                speed = 1.0
+                if seg_type == "silent":
+                    speed = compute_silent_speed(in_duration)
+                out_duration = 0.0 if speed <= 0 else in_duration / speed
+                progress_map.append(
+                    {
+                        "out_start": out_cursor,
+                        "out_end": out_cursor + out_duration,
+                        "in_start": seg_start,
+                        "in_end": seg_end,
+                        "speed": speed,
+                    }
+                )
+                out_cursor += out_duration
+
+        def map_out_time_to_input_time(out_time_seconds):
+            nonlocal progress_map_index
+            if not progress_map:
+                return out_time_seconds
+            while (
+                progress_map_index < len(progress_map)
+                and out_time_seconds > progress_map[progress_map_index]["out_end"] + 1e-6
+            ):
+                progress_map_index += 1
+            if progress_map_index >= len(progress_map):
+                return video_duration
+            seg = progress_map[progress_map_index]
+            rel_out = max(0.0, min(out_time_seconds - seg["out_start"], seg["out_end"] - seg["out_start"]))
+            return min(video_duration, seg["in_start"] + rel_out * seg["speed"])
+
         if tqdm is None:
             print("[warn] tqdm is not installed; running without progress bar.")
             proc = subprocess.Popen(
@@ -880,7 +924,8 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
                             if value != "N/A":
                                 ms = int(value)
                                 seconds = ms / 1_000_000
-                                pbar.n = min(seconds, video_duration)
+                                input_seconds = map_out_time_to_input_time(seconds)
+                                pbar.n = min(input_seconds, video_duration)
                                 pbar.refresh()
                         except (ValueError, IndexError):
                             pass
@@ -890,7 +935,8 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
                             if t != "N/A":
                                 h, m, s = t.split(":")
                                 seconds = int(h) * 3600 + int(m) * 60 + float(s)
-                                pbar.n = min(seconds, video_duration)
+                                input_seconds = map_out_time_to_input_time(seconds)
+                                pbar.n = min(input_seconds, video_duration)
                                 pbar.refresh()
                         except (ValueError, IndexError):
                             pass
@@ -1009,8 +1055,45 @@ def main():
         for seg in segments:
             print(seg)
 
+        if args.debug_segments:
+            print("\n[debug] Segment speed details (input_time -> output_time):")
+            total_out = 0.0
+            longest_silent = None
+            for idx, (start, end, typ) in enumerate(segments):
+                in_dur = max(0.0, end - start)
+                speed = 1.0 if typ != "silent" else compute_silent_speed(in_dur)
+                out_dur = 0.0 if speed <= 0 else in_dur / speed
+                total_out += out_dur
+                if typ == "silent":
+                    if longest_silent is None or in_dur > longest_silent["in_dur"]:
+                        longest_silent = {
+                            "idx": idx,
+                            "start": start,
+                            "end": end,
+                            "in_dur": in_dur,
+                            "speed": speed,
+                            "out_dur": out_dur,
+                        }
+                overlay = "on" if (args.indicator and typ == "silent") else "off"
+                if typ == "silent" or in_dur >= 30.0:
+                    print(
+                        f"  seg#{idx:03d} {typ:10s} in=[{start:.2f},{end:.2f}] "
+                        f"in_dur={in_dur:.2f}s speed={speed:.2f} out_dur={out_dur:.2f}s overlay={overlay}"
+                    )
+            print(f"[debug] Estimated output duration from segments: {total_out:.2f}s")
+            if longest_silent:
+                print(
+                    "[debug] Longest silent segment:\n"
+                    f"  seg#{longest_silent['idx']:03d} in=[{longest_silent['start']:.2f},{longest_silent['end']:.2f}] "
+                    f"in_dur={longest_silent['in_dur']:.2f}s speed={longest_silent['speed']:.2f} "
+                    f"out_dur={longest_silent['out_dur']:.2f}s"
+                )
+
         # Set attribute for GPU decode (hacky, but avoids changing all function signatures)
         setattr(run_ffmpeg_processing, "use_gpu_decode", args.gpu_decode)
+        # Progress mapping: let run_ffmpeg_processing estimate input-time progress even when output time is
+        # compressed by setpts for sped-up segments.
+        setattr(run_ffmpeg_processing, "progress_segments", segments)
 
         # Task 3.2: Build FFmpeg filtergraph
         filtergraph = build_filtergraph(

@@ -5,6 +5,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 
 ---
 
+<a id="task-t001-add-cli-flags"></a>
 ## Task T001: Add CLI flags `--vad` and `--vad-threshold`
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -31,6 +32,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t015-manual-indicator"></a>
 ## Task T015: Manual validation — `--indicator` with `--vad`
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -58,6 +60,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t014-manual-missing-deps"></a>
 ## Task T014: Manual validation — dependency-missing path
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -83,6 +86,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t013-manual-baseline-vad"></a>
 ## Task T013: Manual validation — baseline vs VAD on screencast
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -117,6 +121,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t012-readme"></a>
 ## Task T012: Update README for `--vad` and tuning
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -140,6 +145,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t011-interval-sanity-check"></a>
 ## Task T011: Add interval sanity-check before filtergraph build
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -164,6 +170,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t010-integrate-main"></a>
 ## Task T010: Integrate VAD branch into `main()`
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -199,6 +206,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t009-speech-to-silence"></a>
 ## Task T009: Convert speech segments → silence intervals
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -225,6 +233,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t008-postprocess-speech"></a>
 ## Task T008: Post-process speech segments (merge/pad/clamp)
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -251,6 +260,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t007-silero-speech-detection"></a>
 ## Task T007: Detect speech segments with Silero (`return_seconds=True`)
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -277,6 +287,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t006-streaming-pcm"></a>
 ## Task T006: Add streaming PCM reader for large inputs
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -301,6 +312,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t005-pcm-to-tensor"></a>
 ## Task T005: Convert PCM bytes to normalized torch tensor
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -326,6 +338,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t004-ffmpeg-pcm-extraction"></a>
 ## Task T004: Implement FFmpeg audio extraction to PCM via pipe
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -352,6 +365,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t003-vad-dep-probe"></a>
 ## Task T003: Implement VAD dependency probe + actionable error
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
@@ -379,6 +393,7 @@ Spec: `/Users/jordanknight/github/videospeeder/docs/plans/006-vad/vad-speech-det
 **Completed**: 2025-12-18T00:00:00Z
 ---
 
+<a id="task-t002-add-vad-deps"></a>
 ## Task T002: Add VAD deps to requirements
 **Started**: 2025-12-18T00:00:00Z  
 **Status**: ✅ Complete
