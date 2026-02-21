@@ -97,10 +97,10 @@ def parse_args():
         description="VideoSpeeder: Speed up silent sections in a video file."
     )
     parser.add_argument(
-        "--input", "-i", required=True, help="Path to input video file."
+        "--input", "-i", help="Path to input video file."
     )
     parser.add_argument(
-        "--output", "-o", required=True, help="Path to output video file."
+        "--output", "-o", help="Path to output video file."
     )
     parser.add_argument(
         "--threshold", "-t", type=float, default=-30.0,
@@ -118,15 +118,28 @@ def parse_args():
         if parsed < 0.0 or parsed > 1.0:
             raise argparse.ArgumentTypeError("must be between 0.0 and 1.0")
         return parsed
-    parser.add_argument(
+    # Detection mode: --vad and --vad-json are mutually exclusive
+    detection_group = parser.add_mutually_exclusive_group()
+    detection_group.add_argument(
         "--vad", action="store_true",
         help="Use Voice Activity Detection (Silero VAD) to detect speech vs non-speech (keyboard/mouse/noise)."
+    )
+    detection_group.add_argument(
+        "--vad-json", type=str, default=None, metavar="PATH",
+        help="Load silence intervals from a .vad.json sidecar file (skips detection)."
+    )
+    parser.add_argument(
+        "--detect", action="store_true",
+        help="Run detection only: write a .vad.json sidecar file and exit without processing video."
+    )
+    parser.add_argument(
+        "--quiet", action="store_true",
+        help="Suppress verbose output (stats, intervals, filtergraph). Keep progress bar and summary."
     )
     parser.add_argument(
         "--vad-threshold", type=_float_0_1, default=0.75,
         help="VAD speech probability threshold in [0.0, 1.0] (default: 0.75). Higher rejects more keyboard noise."
     )
-    # --speed argument removed as speed is now dynamic
     parser.add_argument(
         "--indicator", action="store_true",
         help="Show '>>' indicator during sped-up segments."
@@ -614,6 +627,90 @@ def validate_silence_intervals(silence_intervals, max_end):
             raise ValueError(f"silence interval {idx} exceeds max_end={max_end}: ({start}, {end})")
         prev_end = end
 
+def silence_intervals_to_speech_segments(silence_intervals, total_duration):
+    """
+    Convert silence intervals into speech segments (the inverse of speech_segments_to_silence_intervals).
+    Used when the silencedetect backend provides silence intervals directly and we need
+    speech_segments for the sidecar file.
+    """
+    if not silence_intervals:
+        return [(0.0, float(total_duration))]
+    segments = []
+    prev_end = 0.0
+    for start, end in silence_intervals:
+        if start > prev_end:
+            segments.append((prev_end, start))
+        prev_end = max(prev_end, end)
+    if prev_end < total_duration:
+        segments.append((prev_end, float(total_duration)))
+    return segments
+
+def write_vad_metadata(input_file, speech_segments, silence_intervals, analyzed_duration,
+                       backend, params):
+    """
+    Write a .vad.json sidecar file next to the input video.
+    Schema v1: version, source, detection (backend, analyzed_duration, params),
+    speech_segments as [[s,e],...], silence_intervals as [[s,e],...].
+    """
+    import json
+
+    sidecar_path = os.path.splitext(input_file)[0] + ".vad.json"
+    payload = {
+        "version": 1,
+        "source": {
+            "file": os.path.basename(input_file),
+        },
+        "detection": {
+            "backend": backend,
+            "analyzed_duration": round(analyzed_duration, 3),
+            "params": params,
+        },
+        "speech_segments": [[round(s, 3), round(e, 3)] for s, e in speech_segments],
+        "silence_intervals": [[round(s, 3), round(e, 3)] for s, e in silence_intervals],
+    }
+    try:
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+            f.write("\n")
+    except PermissionError:
+        sidecar_dir = os.path.dirname(os.path.abspath(sidecar_path))
+        print(f"Error: Cannot write sidecar — check write permissions for: {sidecar_dir}",
+              file=sys.stderr)
+        sys.exit(1)
+    return sidecar_path
+
+def load_vad_metadata(vad_json_path):
+    """
+    Load a .vad.json sidecar file. Validates version == 1.
+    Returns (silence_intervals, analyzed_duration) where silence_intervals
+    is a list of (start, end) tuples.
+    """
+    import json
+
+    with open(vad_json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    version = data.get("version")
+    if version != 1:
+        print(f"Unsupported vad.json version: {version}", file=sys.stderr)
+        sys.exit(1)
+
+    silence_intervals = [(float(s), float(e)) for s, e in data["silence_intervals"]]
+    analyzed_duration = float(data["detection"]["analyzed_duration"])
+    return silence_intervals, analyzed_duration
+
+def truncate_intervals_to_duration(intervals, max_duration):
+    """
+    Truncate silence intervals to fit within [0, max_duration].
+    Drops intervals that start past max_duration; clamps end to max_duration.
+    """
+    result = []
+    for start, end in intervals:
+        if start >= max_duration:
+            break
+        result.append((start, min(end, max_duration)))
+    return result
+
 def calculate_segments(silence_intervals, video_duration, buffer_duration=1.0):
     """
     Given silence intervals and total duration, returns a list of segments:
@@ -957,41 +1054,121 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
 
 def main():
     args = parse_args()
-    print("Arguments parsed:")
-    for k, v in vars(args).items():
-        print(f"  {k}: {v}")
 
-    # Debug: Show current working directory and file list
-    print(f"[DEBUG] Current working directory: {os.getcwd()}")
-    print(f"[DEBUG] Files in cwd: {os.listdir(os.getcwd())}")
+    # --- Argument validation matrix ---
+    # --detect + --vad-json is invalid (detect writes sidecar, vad-json reads one)
+    if args.detect and args.vad_json:
+        print("Error: --detect and --vad-json cannot be used together.", file=sys.stderr)
+        sys.exit(1)
 
-    # If indicator or any software filter is used, disable GPU decode (hardware decode)
-    if args.indicator or True:  # Always True for now, as filtergraph always uses software filters
-        print("[info] Disabling GPU decode due to software filters in filtergraph.")
-        args.gpu_decode = False
-
-    # Probe and print video stats before any processing
-    print(f"[DEBUG] Probing input file: {args.input}")
-    probe_and_print_video_stats(args.input)
-
-    png_path = os.path.join(os.path.dirname(__file__), "fastforward.png")
+    # Mode-specific required args
+    if args.detect:
+        # Detect-only: needs -i, no -o needed
+        if not args.input:
+            print("Error: --detect requires -i/--input.", file=sys.stderr)
+            sys.exit(1)
+    elif args.vad_json:
+        # Process from sidecar: needs -i and -o
+        if not args.input:
+            print("Error: --vad-json requires -i/--input.", file=sys.stderr)
+            sys.exit(1)
+        if not args.output:
+            print("Error: --vad-json requires -o/--output.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Normal processing: needs -i and -o
+        if not args.input:
+            print("Error: -i/--input is required.", file=sys.stderr)
+            sys.exit(1)
+        if not args.output:
+            print("Error: -o/--output is required.", file=sys.stderr)
+            sys.exit(1)
 
     # Error handling: Check for ffmpeg and ffprobe
     if shutil.which("ffmpeg") is None:
-        print("[DEBUG] ffmpeg not found in PATH.")
-        print("Error: ffmpeg is not installed or not in PATH.")
+        print("Error: ffmpeg is not installed or not in PATH.", file=sys.stderr)
         sys.exit(1)
     if shutil.which("ffprobe") is None:
-        print("[DEBUG] ffprobe not found in PATH.")
-        print("Error: ffprobe is not installed or not in PATH.")
+        print("Error: ffprobe is not installed or not in PATH.", file=sys.stderr)
         sys.exit(1)
     # Check input file exists
     if not os.path.isfile(args.input):
-        print(f"[DEBUG] Input file existence check failed: {args.input}")
-        print(f"Error: Input file '{args.input}' does not exist.")
+        print(f"Error: Input file '{args.input}' does not exist.", file=sys.stderr)
         sys.exit(1)
-    else:
-        print(f"[DEBUG] Input file exists: {args.input}")
+
+    # --- Detect-only mode: write sidecar and exit ---
+    if args.detect:
+        if args.process_duration:
+            video_duration = args.process_duration
+        else:
+            full_duration = get_video_duration(args.input)
+            video_duration = max(0, full_duration - args.offset)
+
+        if args.vad:
+            # Silero VAD detection
+            try:
+                speech_segments_raw = detect_speech_segments_silero(
+                    args.input,
+                    vad_threshold=args.vad_threshold,
+                    offset=args.offset,
+                    process_duration=args.process_duration,
+                )
+            except RuntimeError as e:
+                print(str(e), file=sys.stderr)
+                sys.exit(1)
+            speech_segments = normalize_speech_segments(
+                speech_segments_raw, max_end=video_duration,
+            )
+            silence_intervals = speech_segments_to_silence_intervals(
+                speech_segments, total_duration=video_duration
+            )
+            backend = "silero"
+            params = {
+                "vad_threshold": args.vad_threshold,
+                "offset": args.offset,
+                "process_duration": args.process_duration,
+            }
+        else:
+            # FFmpeg silencedetect detection
+            silencedetect_stderr = run_silencedetect(
+                args.input, args.threshold, args.duration,
+                offset=args.offset, process_duration=args.process_duration,
+            )
+            silence_intervals = parse_silencedetect_output(silencedetect_stderr)
+            speech_segments = silence_intervals_to_speech_segments(
+                silence_intervals, video_duration
+            )
+            backend = "silencedetect"
+            params = {
+                "silence_threshold": args.threshold,
+                "silence_duration": args.duration,
+                "offset": args.offset,
+                "process_duration": args.process_duration,
+            }
+
+        sidecar_path = write_vad_metadata(
+            args.input, speech_segments, silence_intervals,
+            video_duration, backend, params
+        )
+        # Always print detect summary (even with --quiet — this IS the result)
+        speech_total = sum(e - s for s, e in speech_segments)
+        speech_pct = (speech_total / video_duration * 100) if video_duration > 0 else 0
+        print(f"Wrote: {sidecar_path} ({speech_pct:.1f}% speech, "
+              f"{len(silence_intervals)} silence intervals, "
+              f"{video_duration:.1f}s analyzed)")
+        sys.exit(0)
+
+    # If indicator or any software filter is used, disable GPU decode (hardware decode)
+    if args.indicator or True:  # Always True for now, as filtergraph always uses software filters
+        if not args.quiet:
+            print("[info] Disabling GPU decode due to software filters in filtergraph.")
+        args.gpu_decode = False
+
+    # Probe and print video stats before any processing
+    if not args.quiet:
+        probe_and_print_video_stats(args.input)
+
+    png_path = os.path.join(os.path.dirname(__file__), "fastforward.png")
 
     try:
         # Determine processing duration.
@@ -1001,10 +1178,32 @@ def main():
         else:
             full_duration = get_video_duration(args.input)
             video_duration = max(0, full_duration - args.offset)
-        print(f"Processing duration: {video_duration:.2f} seconds (offset: {args.offset})")
+        if not args.quiet:
+            print(f"Processing duration: {video_duration:.2f} seconds (offset: {args.offset})")
 
-        if args.vad:
-            print(f"\nUsing VAD (Silero) threshold={args.vad_threshold}")
+        if args.vad_json:
+            # Load silence intervals from sidecar file (skip detection)
+            if not args.quiet:
+                print(f"Loading VAD metadata from {args.vad_json} (skipping detection)")
+            silence_intervals, analyzed_duration = load_vad_metadata(args.vad_json)
+            actual_duration = get_video_duration(args.input)
+            if args.offset:
+                actual_duration = max(0, actual_duration - args.offset)
+            if args.process_duration:
+                actual_duration = min(actual_duration, args.process_duration)
+            duration_diff = abs(analyzed_duration - actual_duration)
+            if duration_diff > 1.0:
+                print(f"Warning: Sidecar analyzed {analyzed_duration:.1f}s but video is "
+                      f"{actual_duration:.1f}s (diff: {duration_diff:.1f}s). "
+                      f"Truncating intervals to video duration.", file=sys.stderr)
+                silence_intervals = truncate_intervals_to_duration(
+                    silence_intervals, actual_duration
+                )
+            video_duration = actual_duration
+
+        elif args.vad:
+            if not args.quiet:
+                print(f"\nUsing VAD (Silero) threshold={args.vad_threshold}")
             try:
                 speech_segments_raw = detect_speech_segments_silero(
                     args.input,
@@ -1027,12 +1226,14 @@ def main():
             except ValueError as e:
                 print(f"Invalid VAD-derived silence intervals: {e}", file=sys.stderr)
                 sys.exit(1)
-            print("VAD-derived silence intervals (start, end):")
-            for interval in silence_intervals:
-                print(interval)
+            if not args.quiet:
+                print("VAD-derived silence intervals (start, end):")
+                for interval in silence_intervals:
+                    print(interval)
         else:
-            # Task 2.1: Run silencedetect and print stderr
-            print("\nRunning FFmpeg silencedetect...")
+            # FFmpeg silencedetect
+            if not args.quiet:
+                print("\nRunning FFmpeg silencedetect...")
             silencedetect_stderr = run_silencedetect(
                 args.input,
                 args.threshold,
@@ -1040,20 +1241,22 @@ def main():
                 offset=args.offset,
                 process_duration=args.process_duration,
             )
-            print("FFmpeg silencedetect output:")
-            print(silencedetect_stderr)
+            if not args.quiet:
+                print("FFmpeg silencedetect output:")
+                print(silencedetect_stderr)
 
-            # Task 2.2: Parse silencedetect output
             silence_intervals = parse_silencedetect_output(silencedetect_stderr)
-            print("Parsed silence intervals (start, end):")
-            for interval in silence_intervals:
-                print(interval)
+            if not args.quiet:
+                print("Parsed silence intervals (start, end):")
+                for interval in silence_intervals:
+                    print(interval)
 
         # Silence intervals and segments are relative to the processed region (start at 0).
         segments = calculate_segments(silence_intervals, video_duration)
-        print("Segments (start, end, type):")
-        for seg in segments:
-            print(seg)
+        if not args.quiet:
+            print("Segments (start, end, type):")
+            for seg in segments:
+                print(seg)
 
         if args.debug_segments:
             print("\n[debug] Segment speed details (input_time -> output_time):")
@@ -1103,13 +1306,15 @@ def main():
             png_input_index=1,
             png_path=png_path
         )
-        print("Generated FFmpeg filtergraph:")
-        print(filtergraph)
+        if not args.quiet:
+            print("Generated FFmpeg filtergraph:")
+            print(filtergraph)
 
         # Task 3.3: Run main FFmpeg processing
         # Detect input codec
         codec_name = get_video_codec(args.input)
-        print(f"Input video codec detected: {codec_name}")
+        if not args.quiet:
+            print(f"Input video codec detected: {codec_name}")
         # Pass offset and process_duration to ffmpeg via -ss/-t
         run_ffmpeg_processing(
             args.input,
@@ -1123,7 +1328,6 @@ def main():
             png_path=png_path
         )
     except Exception as e:
-        print(f"[DEBUG] Exception occurred in main(): {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
