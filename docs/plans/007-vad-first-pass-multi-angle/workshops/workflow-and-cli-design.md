@@ -149,11 +149,10 @@ $ python videospeeder.py --folder session_2026-02-20/ \
 │           (1200.0s < 3842.5s) — will process available      │
 │           portion only                                      │
 │                                                             │
-│   Proceed? [Y/n]                                            │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-After confirmation, processes each video sequentially:
+Processing starts immediately (no interactive prompt — per spec OQ-3):
 ```
 [1/4] Processing facecam.mp4...
 Processing: 100%|████████████████████████| 3842/3842 [08:23<00:00]

@@ -5,7 +5,7 @@
 **Created**: 2026-02-22
 **Spec**: [./vad-first-pass-multi-angle-spec.md](./vad-first-pass-multi-angle-spec.md)
 **Workshops**: [./workshops/workflow-and-cli-design.md](./workshops/workflow-and-cli-design.md)
-**Status**: IN_PROGRESS
+**Status**: COMPLETE
 
 ## Table of Contents
 1. [Executive Summary](#executive-summary)
@@ -152,23 +152,23 @@ run_ffmpeg_processing() ← existing, unchanged
 
 | Status | ID | Task | CS | Type | Dependencies | Absolute Path(s) | Validation | Notes |
 |--------|-----|------|----|------|--------------|------------------|------------|-------|
-| [ ] | T009 | Add `--folder`, `--vad-master`, `--overwrite`, `--extensions` flags to parse_args() | 1 | Core | T008 | /home/jak/github/videospeeder/videospeeder_project/videospeeder.py | All four flags accepted; `--extensions` defaults to `mp4,mkv,mov,avi,webm`; validation: `--folder`+`--vad`-without-`--vad-master` → error | |
-| [ ] | T010 | Implement `discover_videos()` helper | 1 | Core | T009 | /home/jak/github/videospeeder/videospeeder_project/videospeeder.py | Returns sorted list of video file paths matching extensions; excludes `.vad.json` files | Default extensions: mp4,mkv,mov,avi,webm. Sort alphabetically. |
-| [ ] | T011 | Implement `discover_sidecar()` helper | 1 | Core | T009 | /home/jak/github/videospeeder/videospeeder_project/videospeeder.py | Exactly one `.vad.json` → return path and print which file found (AC-8); zero → error; multiple → error listing found files (AC-9) | |
-| [ ] | T012 | Implement folder processing loop in main() | 3 | Core | T010, T011 | /home/jak/github/videospeeder/videospeeder_project/videospeeder.py | `--folder dir/ --vad-json sidecar -o dir/output/`: processes all videos sequentially using shared sidecar (AC-7). Skips existing outputs unless `--overwrite` (AC-11). Continues on single-file failure with error logged (AC-12). Creates output dir if needed. Prints summary: "Done. N/M videos processed." | Key orchestration: for each video, compute duration, truncate intervals, set progress_segments attr, call build_filtergraph + run_ffmpeg_processing. Auto-discover sidecar if `--vad-json` not given. |
-| [ ] | T013 | Implement `--vad-master` one-liner mode | 2 | Core | T012 | /home/jak/github/videospeeder/videospeeder_project/videospeeder.py | `--folder dir/ --vad --vad-master facecam.mp4 -o dir/output/`: detects on master, writes sidecar, then processes all (AC-10) | Combines T005 detect logic + T012 folder logic. |
-| [ ] | T014 | Add Justfile recipes for new workflows | 1 | Tooling | T013 | /home/jak/github/videospeeder/Justfile | `just detect`, `just speed-folder`, `just speed-all` recipes work | Use staging video paths as defaults. |
-| [ ] | T015 | Update README.md with new flags and multi-angle workflow | 2 | Docs | T013 | /home/jak/github/videospeeder/README.md | New flags documented under Common Options; multi-angle workflow example section added with 2-step and 1-liner variants | Per Documentation Strategy: README.md only. |
-| [ ] | T016 | End-to-end manual validation of all acceptance criteria | 1 | Validation | T015 | -- | All AC-1 through AC-16 verified with staging videos from `~/VideoMedia/staging` | Full regression pass. |
+| [x] | T009 | Add `--folder`, `--vad-master`, `--overwrite`, `--extensions` flags to parse_args() | 1 | Core | T008 | /home/jak/github/videospeeder/videospeeder_project/videospeeder.py | All four flags accepted; `--extensions` defaults to `mp4,mkv,mov,avi,webm`; validation: `--folder`+`--vad`-without-`--vad-master` → error | [^7] |
+| [x] | T010 | Implement `discover_videos()` helper | 1 | Core | T009 | /home/jak/github/videospeeder/videospeeder_project/videospeeder.py | Returns sorted list of video file paths matching extensions; excludes `.vad.json` files | [^8] |
+| [x] | T011 | Implement `discover_sidecar()` helper | 1 | Core | T009 | /home/jak/github/videospeeder/videospeeder_project/videospeeder.py | Exactly one `.vad.json` → return path and print which file found (AC-8); zero → error; multiple → error listing found files (AC-9) | [^8] |
+| [x] | T012 | Implement folder processing loop in main() | 3 | Core | T010, T011 | /home/jak/github/videospeeder/videospeeder_project/videospeeder.py | `--folder dir/ --vad-json sidecar -o dir/output/`: processes all videos sequentially using shared sidecar (AC-7). Skips existing outputs unless `--overwrite` (AC-11). Continues on single-file failure with error logged (AC-12). Creates output dir if needed. Prints summary: "Done. N/M videos processed." | [^9] |
+| [x] | T013 | Implement `--vad-master` one-liner mode | 2 | Core | T012 | /home/jak/github/videospeeder/videospeeder_project/videospeeder.py | `--folder dir/ --vad --vad-master facecam.mp4 -o dir/output/`: detects on master, writes sidecar, then processes all (AC-10) | [^10] |
+| [x] | T014 | Add Justfile recipes for new workflows | 1 | Tooling | T013 | /home/jak/github/videospeeder/Justfile | `just detect`, `just speed-folder`, `just speed-all` recipes work | [^11] |
+| [x] | T015 | Update README.md with new flags and multi-angle workflow | 2 | Docs | T013 | /home/jak/github/videospeeder/README.md | New flags documented under Common Options; multi-angle workflow example section added with 2-step and 1-liner variants | [^12] |
+| [x] | T016 | End-to-end manual validation of all acceptance criteria | 1 | Validation | T015 | -- | All AC-1 through AC-16 verified with staging videos from `~/VideoMedia/staging` | [^13] |
 
 ### Acceptance Criteria (Phase 2)
-- [ ] AC-7: Folder mode processes all videos with shared sidecar
-- [ ] AC-8: Folder mode auto-discovers single sidecar
-- [ ] AC-9: Folder mode errors on ambiguous (multiple) sidecars
-- [ ] AC-10: `--vad-master` does detect + process in one command
-- [ ] AC-11: Folder mode skips existing outputs (respects --overwrite)
-- [ ] AC-12: Folder mode continues on single-file failure
-- [ ] AC-1–AC-6, AC-13–AC-16: Full regression pass
+- [x] AC-7: Folder mode processes all videos with shared sidecar
+- [x] AC-8: Folder mode auto-discovers single sidecar
+- [x] AC-9: Folder mode errors on ambiguous (multiple) sidecars
+- [x] AC-10: `--vad-master` does detect + process in one command
+- [x] AC-11: Folder mode skips existing outputs (respects --overwrite)
+- [x] AC-12: Folder mode continues on single-file failure
+- [x] AC-1–AC-6, AC-13–AC-16: Full regression pass
 
 ### Risks (Phase 2)
 | Risk | Likelihood | Impact | Mitigation |
@@ -229,6 +229,29 @@ run_ffmpeg_processing() ← existing, unchanged
 
 [^6]: Task T007 - Added --quiet mode output suppression
   - `function:videospeeder_project/videospeeder.py:main`
+
+[^7]: Task T009 - Added folder CLI flags and validation matrix
+  - `function:videospeeder_project/videospeeder.py:parse_args`
+  - `function:videospeeder_project/videospeeder.py:main`
+
+[^8]: Task T010/T011 - Implemented discover_videos() and discover_sidecar() helpers
+  - `function:videospeeder_project/videospeeder.py:discover_videos`
+  - `function:videospeeder_project/videospeeder.py:discover_sidecar`
+
+[^9]: Task T012 - Implemented folder processing loop in main()
+  - `function:videospeeder_project/videospeeder.py:main`
+
+[^10]: Task T013 - Implemented --vad-master one-liner mode
+  - `function:videospeeder_project/videospeeder.py:main`
+
+[^11]: Task T014 - Added Justfile recipes for folder workflows
+  - `file:Justfile`
+
+[^12]: Task T015 - Updated README with folder flags and multi-angle workflow
+  - `file:README.md`
+
+[^13]: Task T016 - End-to-end manual validation of all acceptance criteria
+  - `file:videospeeder_project/videospeeder.py`
 
 ---
 

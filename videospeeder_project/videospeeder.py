@@ -118,11 +118,15 @@ def parse_args():
         if parsed < 0.0 or parsed > 1.0:
             raise argparse.ArgumentTypeError("must be between 0.0 and 1.0")
         return parsed
-    # Detection mode: --vad and --vad-json are mutually exclusive
+    # Detection mode: VAD is on by default; --no-vad falls back to silencedetect
     detection_group = parser.add_mutually_exclusive_group()
     detection_group.add_argument(
-        "--vad", action="store_true",
-        help="Use Voice Activity Detection (Silero VAD) to detect speech vs non-speech (keyboard/mouse/noise)."
+        "--vad", action="store_true", default=True,
+        help="Use Voice Activity Detection (Silero VAD) to detect speech vs non-speech (default: on)."
+    )
+    detection_group.add_argument(
+        "--no-vad", action="store_false", dest="vad",
+        help="Disable VAD and use FFmpeg silencedetect instead (amplitude-based)."
     )
     detection_group.add_argument(
         "--vad-json", type=str, default=None, metavar="PATH",
@@ -163,6 +167,22 @@ def parse_args():
     parser.add_argument(
         "--debug-segments", action="store_true",
         help="Print computed segments with speed/output timing details (useful for diagnosing slow sections)."
+    )
+    parser.add_argument(
+        "--folder", type=str, default=None, metavar="DIR",
+        help="Process all video files in DIR using a shared .vad.json sidecar."
+    )
+    parser.add_argument(
+        "--vad-master", type=str, default=None, metavar="FILE",
+        help="Master video file for VAD detection in folder mode. Detects on this file, then processes all videos in --folder."
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true",
+        help="Re-process videos even if output files already exist (default: skip existing)."
+    )
+    parser.add_argument(
+        "--extensions", type=str, default="mp4,mkv,mov,avi,webm",
+        help="Comma-separated video file extensions for folder mode (default: mp4,mkv,mov,avi,webm)."
     )
     return parser.parse_args()
 
@@ -711,7 +731,47 @@ def truncate_intervals_to_duration(intervals, max_duration):
         result.append((start, min(end, max_duration)))
     return result
 
-def calculate_segments(silence_intervals, video_duration, buffer_duration=1.0):
+def discover_videos(folder, extensions):
+    """
+    Scan a folder for video files matching the given extensions (comma-separated string).
+    Returns a sorted list of absolute paths. Excludes *.vad.json files.
+    """
+    ext_list = [e.strip().lower().lstrip(".") for e in extensions.split(",") if e.strip()]
+    videos = []
+    for entry in os.listdir(folder):
+        filepath = os.path.join(folder, entry)
+        if not os.path.isfile(filepath):
+            continue
+        if entry.lower().endswith(".vad.json"):
+            continue
+        _, ext = os.path.splitext(entry)
+        if ext.lower().lstrip(".") in ext_list:
+            videos.append(filepath)
+    videos.sort()
+    return videos
+
+def discover_sidecar(folder):
+    """
+    Find exactly one .vad.json sidecar file in folder.
+    Returns the path if exactly one found.
+    Prints error and exits if zero or multiple found.
+    """
+    import glob
+    pattern = os.path.join(folder, "*.vad.json")
+    sidecars = sorted(glob.glob(pattern))
+    if len(sidecars) == 0:
+        print(f"Error: No .vad.json sidecar found in '{folder}'.", file=sys.stderr)
+        sys.exit(1)
+    if len(sidecars) > 1:
+        print(f"Error: Multiple .vad.json sidecars found in '{folder}':", file=sys.stderr)
+        for s in sidecars:
+            print(f"  {s}", file=sys.stderr)
+        print("Specify which to use with --vad-json.", file=sys.stderr)
+        sys.exit(1)
+    print(f"Auto-discovered sidecar: {sidecars[0]}")
+    return sidecars[0]
+
+def calculate_segments(silence_intervals, video_duration, buffer_duration=2.0):
     """
     Given silence intervals and total duration, returns a list of segments:
     Each segment is (start, end, type) where type is 'silent' or 'non-silent'.
@@ -1061,8 +1121,27 @@ def main():
         print("Error: --detect and --vad-json cannot be used together.", file=sys.stderr)
         sys.exit(1)
 
+    # --vad-master requires --folder
+    if args.vad_master and not args.folder:
+        print("Error: --vad-master requires --folder.", file=sys.stderr)
+        sys.exit(1)
+
     # Mode-specific required args
-    if args.detect:
+    if args.folder:
+        # Folder mode validation
+        if args.detect:
+            print("Error: --folder and --detect cannot be used together.", file=sys.stderr)
+            sys.exit(1)
+        if not args.output:
+            print("Error: --folder requires -o/--output (output directory).", file=sys.stderr)
+            sys.exit(1)
+        # Note: --folder works with --vad-master (detect then process),
+        # --vad-json (explicit sidecar), or auto-discovered sidecar in folder.
+        # No validation needed here; discover_sidecar() handles missing sidecar.
+        if not os.path.isdir(args.folder):
+            print(f"Error: Folder '{args.folder}' does not exist or is not a directory.", file=sys.stderr)
+            sys.exit(1)
+    elif args.detect:
         # Detect-only: needs -i, no -o needed
         if not args.input:
             print("Error: --detect requires -i/--input.", file=sys.stderr)
@@ -1091,8 +1170,8 @@ def main():
     if shutil.which("ffprobe") is None:
         print("Error: ffprobe is not installed or not in PATH.", file=sys.stderr)
         sys.exit(1)
-    # Check input file exists
-    if not os.path.isfile(args.input):
+    # Check input file exists (only when -i is provided; folder mode doesn't need -i)
+    if args.input and not os.path.isfile(args.input):
         print(f"Error: Input file '{args.input}' does not exist.", file=sys.stderr)
         sys.exit(1)
 
@@ -1157,6 +1236,196 @@ def main():
               f"{len(silence_intervals)} silence intervals, "
               f"{video_duration:.1f}s analyzed)")
         sys.exit(0)
+
+    # --- Folder processing mode ---
+    if args.folder:
+        # DYK #3: Prevent output dir == input dir with --overwrite (would destroy sources)
+        output_dir = args.output
+        if os.path.realpath(args.folder) == os.path.realpath(output_dir):
+            print("Error: Output directory is the same as input folder. "
+                  "This would overwrite source files. Use a different -o path.",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        # --vad-master: detect on master file first, then process folder
+        if args.vad_master:
+            master_path = args.vad_master
+            # Resolve relative to --folder if not absolute
+            if not os.path.isabs(master_path):
+                master_path = os.path.join(args.folder, master_path)
+            if not os.path.isfile(master_path):
+                print(f"Error: Master file '{master_path}' does not exist.", file=sys.stderr)
+                sys.exit(1)
+
+            print(f"Detecting speech on master file: {master_path}")
+            # Compute detection duration (same as detect-only path)
+            if args.process_duration:
+                detect_duration = args.process_duration
+            else:
+                full_dur = get_video_duration(master_path)
+                detect_duration = max(0, full_dur - args.offset)
+
+            if args.vad:
+                # Silero VAD detection
+                try:
+                    speech_segments_raw = detect_speech_segments_silero(
+                        master_path,
+                        vad_threshold=args.vad_threshold,
+                        offset=args.offset,
+                        process_duration=args.process_duration,
+                    )
+                except RuntimeError as e:
+                    print(str(e), file=sys.stderr)
+                    sys.exit(1)
+                speech_segments = normalize_speech_segments(
+                    speech_segments_raw, max_end=detect_duration,
+                )
+                silence_intervals_detected = speech_segments_to_silence_intervals(
+                    speech_segments, total_duration=detect_duration
+                )
+                backend = "silero"
+                params = {
+                    "vad_threshold": args.vad_threshold,
+                    "offset": args.offset,
+                    "process_duration": args.process_duration,
+                }
+            else:
+                # FFmpeg silencedetect detection
+                silencedetect_stderr = run_silencedetect(
+                    master_path, args.threshold, args.duration,
+                    offset=args.offset, process_duration=args.process_duration,
+                )
+                silence_intervals_detected = parse_silencedetect_output(silencedetect_stderr)
+                speech_segments = silence_intervals_to_speech_segments(
+                    silence_intervals_detected, detect_duration
+                )
+                backend = "silencedetect"
+                params = {
+                    "silence_threshold": args.threshold,
+                    "silence_duration": args.duration,
+                    "offset": args.offset,
+                    "process_duration": args.process_duration,
+                }
+
+            sidecar_path = write_vad_metadata(
+                master_path, speech_segments, silence_intervals_detected,
+                detect_duration, backend, params
+            )
+            speech_total = sum(e - s for s, e in speech_segments)
+            speech_pct = (speech_total / detect_duration * 100) if detect_duration > 0 else 0
+            print(f"Wrote: {sidecar_path} ({speech_pct:.1f}% speech, "
+                  f"{len(silence_intervals_detected)} silence intervals, "
+                  f"{detect_duration:.1f}s analyzed)")
+
+        # Resolve sidecar: explicit --vad-json, just-written by vad-master, or auto-discover
+        if args.vad_json:
+            sidecar_path = args.vad_json
+        elif not args.vad_master:
+            # Only auto-discover if vad-master didn't just write one
+            sidecar_path = discover_sidecar(args.folder)
+
+        # Load sidecar once (shared across all videos)
+        silence_intervals_master, analyzed_duration = load_vad_metadata(sidecar_path)
+
+        # Discover videos
+        videos = discover_videos(args.folder, args.extensions)
+        if not videos:
+            print(f"No video files found in '{args.folder}' matching extensions: {args.extensions}",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        if not args.quiet:
+            print(f"Found {len(videos)} video(s) in '{args.folder}'")
+            print(f"Using sidecar: {sidecar_path}")
+            print(f"Output directory: {output_dir}")
+
+        png_path = os.path.join(os.path.dirname(__file__), "fastforward.png")
+
+        # DYK #4: GPU decode must be set independently (line 1236 unreachable from here)
+        args.gpu_decode = False
+
+        success_count = 0
+        skip_count = 0
+        fail_count = 0
+        failed_files = []
+
+        for video_path in videos:
+            video_name = os.path.basename(video_path)
+            output_path = os.path.join(output_dir, video_name)
+
+            # Skip existing unless --overwrite
+            if os.path.isfile(output_path) and not args.overwrite:
+                if not args.quiet:
+                    print(f"Skipping (output exists): {video_name}")
+                skip_count += 1
+                continue
+
+            print(f"\nProcessing: {video_name}")
+            try:
+                # Compute per-video duration
+                full_duration = get_video_duration(video_path)
+                video_duration = max(0, full_duration - args.offset)
+                if args.process_duration:
+                    video_duration = min(video_duration, args.process_duration)
+
+                # DYK #2: Defensive copy before truncating per-video
+                silence_intervals = list(silence_intervals_master)
+
+                # Duration mismatch: truncate + warn per video
+                duration_diff = abs(analyzed_duration - video_duration)
+                if duration_diff > 1.0:
+                    print(f"  Warning: Sidecar analyzed {analyzed_duration:.1f}s but "
+                          f"'{video_name}' is {video_duration:.1f}s (diff: {duration_diff:.1f}s). "
+                          f"Truncating intervals.", file=sys.stderr)
+                    silence_intervals = truncate_intervals_to_duration(
+                        silence_intervals, video_duration
+                    )
+
+                segments = calculate_segments(silence_intervals, video_duration)
+
+                # DYK #4: Set setattr per video iteration
+                setattr(run_ffmpeg_processing, "use_gpu_decode", False)
+                setattr(run_ffmpeg_processing, "progress_segments", segments)
+
+                filtergraph = build_filtergraph(
+                    segments,
+                    args.indicator,
+                    use_gpu_decode=False,
+                    png_input_index=1,
+                    png_path=png_path
+                )
+
+                codec_name = get_video_codec(video_path)
+                run_ffmpeg_processing(
+                    video_path,
+                    output_path,
+                    filtergraph,
+                    video_duration,
+                    codec_name,
+                    use_gpu=args.gpu,
+                    offset=args.offset,
+                    process_duration=args.process_duration,
+                    png_path=png_path
+                )
+                success_count += 1
+            except Exception as e:
+                print(f"  Error processing '{video_name}': {e}", file=sys.stderr)
+                fail_count += 1
+                failed_files.append(video_name)
+                continue
+
+        # Print summary (always, even with --quiet)
+        total = len(videos)
+        print(f"\nDone. {success_count}/{total} videos processed"
+              f"{f', {skip_count} skipped' if skip_count else ''}"
+              f"{f', {fail_count} failed' if fail_count else ''}.")
+        if failed_files:
+            print("Failed files:", file=sys.stderr)
+            for f in failed_files:
+                print(f"  {f}", file=sys.stderr)
+        sys.exit(1 if fail_count > 0 and success_count == 0 else 0)
 
     # If indicator or any software filter is used, disable GPU decode (hardware decode)
     if args.indicator or True:  # Always True for now, as filtergraph always uses software filters

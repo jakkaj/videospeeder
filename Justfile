@@ -9,17 +9,17 @@ venv_dir := ".venv-vad"
 script := "videospeeder_project/videospeeder.py"
 
 # Default sample input/output (override as needed)
-input ?= "scratch/output_5min.mp4"
-out_baseline ?= "scratch/out-silencedetect-short.mp4"
-out_vad ?= "scratch/out-vad-short.mp4"
-out_vad_indicator ?= "scratch/out-vad-indicator-short.mp4"
-process_duration ?= "5"
+input := "scratch/output_5min.mp4"
+out_baseline := "scratch/out-silencedetect-short.mp4"
+out_vad := "scratch/out-vad-short.mp4"
+out_vad_indicator := "scratch/out-vad-indicator-short.mp4"
+process_duration := "5"
 
 # Parallel-work sample (uses existing scratch asset)
-parallel_input ?= "scratch/parallel-work-output.mp4"
-parallel_trimmed ?= "scratch/parallel-work-output-trimmed.mp4"
-parallel_vad_600 ?= "scratch/parallel-work-output-trimmed-vad-600s.mp4"
-parallel_process_duration ?= "600"
+parallel_input := "scratch/parallel-work-output.mp4"
+parallel_trimmed := "scratch/parallel-work-output-trimmed.mp4"
+parallel_vad_600 := "scratch/parallel-work-output-trimmed-vad-600s.mp4"
+parallel_process_duration := "600"
 
 default: help
 
@@ -70,3 +70,38 @@ trim-parallel-quarter:
 sample-parallel-vad: trim-parallel-quarter
   . "{{venv_dir}}/bin/activate"
   python "{{script}}" -i "{{parallel_trimmed}}" -o "{{parallel_vad_600}}" --vad --indicator --process-duration "{{parallel_process_duration}}"
+
+# --- Single-file speed-up ---
+
+# Speed up a single video (VAD is on by default, GPU encoding enabled).
+# Usage: just speed input=my_video.mp4 output=my_video_fast.mp4
+speed:
+  . "{{venv_dir}}/bin/activate" && python "{{script}}" -i "{{input}}" -o "{{out_vad}}" --gpu
+
+# --- Multi-angle / Folder workflows ---
+
+# Folder mode variables (override as needed)
+folder := "scratch/multi-angle"
+folder_output := "scratch/multi-angle/output"
+master := "scratch/multi-angle/facecam.mp4"
+
+# Detect speech on a single video and write a .vad.json sidecar.
+detect:
+  . "{{venv_dir}}/bin/activate" && python "{{script}}" -i "{{master}}" --detect
+
+# Process all videos in a folder using an existing .vad.json sidecar.
+speed-folder:
+  . "{{venv_dir}}/bin/activate" && python "{{script}}" --folder "{{folder}}" -o "{{folder_output}}" --gpu
+
+# One-liner: detect on master, then process all videos in folder.
+speed-all:
+  . "{{venv_dir}}/bin/activate" && python "{{script}}" --folder "{{folder}}" --vad-master "{{master}}" -o "{{folder_output}}" --gpu
+
+# --- Utilities ---
+
+browse_dir := "."
+browse_port := "9090"
+
+# Launch filebrowser to browse a local folder (requires Docker).
+browse:
+  ./scripts/browse.sh "{{browse_dir}}" "{{browse_port}}"
