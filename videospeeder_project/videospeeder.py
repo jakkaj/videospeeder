@@ -184,6 +184,11 @@ def parse_args():
         "--extensions", type=str, default="mp4,mkv,mov,avi,webm",
         help="Comma-separated video file extensions for folder mode (default: mp4,mkv,mov,avi,webm)."
     )
+    parser.add_argument(
+        "--parallel", type=int, default=1, metavar="N",
+        help="Process N videos simultaneously in folder mode (default: 1). "
+             "With --gpu, each video uses one NVENC session. Consumer GPUs support ~8-12 concurrent sessions."
+    )
     return parser.parse_args()
 
 def compute_silent_speed(segment_duration):
@@ -943,7 +948,7 @@ def build_filtergraph(segments, indicator, use_gpu_decode=False, png_input_index
     filtergraph += f";{''.join(concat_a)}concat=n={n}:v=0:a=1[aout]" # Concat audio
     return filtergraph
 
-def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, codec_name, use_gpu=False, offset=0.0, process_duration=None, png_path="fastforward.png"):
+def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, codec_name, use_gpu=False, offset=0.0, process_duration=None, png_path="fastforward.png", use_gpu_decode=False, progress_segments=None, show_progress=True):
     """
     Runs the main FFmpeg processing command with the given filtergraph and shows a tqdm progress bar.
     Selects hardware/software encoder/decoder based on codec_name and use_gpu.
@@ -984,7 +989,7 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
     else:
         entry = codec_map[codec_key]
         vcodec = entry["gpu_encoder"] if use_gpu else entry["cpu_encoder"]
-        decoder_args = entry["gpu_decoder"] if use_gpu and getattr(run_ffmpeg_processing, "use_gpu_decode", False) else []
+        decoder_args = entry["gpu_decoder"] if use_gpu and use_gpu_decode else []
 
     print(f"Detected input codec: {codec_name}")
     print(f"Selected encoder: {vcodec}")
@@ -1022,7 +1027,7 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
     print(" ".join(cmd))
     print(f"Filtergraph written to: {fg_path} ({len(filtergraph)} chars)")
     try:
-        progress_segments = getattr(run_ffmpeg_processing, "progress_segments", None)
+        # progress_segments passed as parameter
         progress_map = None
         progress_map_index = 0
         if progress_segments:
@@ -1062,8 +1067,9 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
             rel_out = max(0.0, min(out_time_seconds - seg["out_start"], seg["out_end"] - seg["out_start"]))
             return min(video_duration, seg["in_start"] + rel_out * seg["speed"])
 
-        if tqdm is None:
-            print("[warn] tqdm is not installed; running without progress bar.")
+        if tqdm is None or not show_progress:
+            if tqdm is None and show_progress:
+                print("[warn] tqdm is not installed; running without progress bar.")
             proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1
             )
@@ -1071,7 +1077,7 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
                 line = proc.stdout.readline()
                 if not line:
                     break
-                if line.startswith("out_time_ms=") or line.startswith("out_time="):
+                if show_progress and (line.startswith("out_time_ms=") or line.startswith("out_time=")):
                     print(line.strip())
             proc.wait()
         else:
@@ -1126,6 +1132,66 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
         except OSError:
             pass
 
+def process_single_video(video_path, output_dir, silence_intervals_master, analyzed_duration, args, png_path, show_progress=True):
+    """Process a single video file. Thread-safe: no shared mutable state."""
+    video_name = os.path.basename(video_path)
+    output_path = os.path.join(output_dir, video_name)
+
+    if os.path.isfile(output_path) and not args.overwrite:
+        if not args.quiet:
+            print(f"Skipping (output exists): {video_name}")
+        return {"status": "skipped", "file": video_name}
+
+    if show_progress:
+        print(f"\nProcessing: {video_name}")
+    try:
+        full_duration = get_video_duration(video_path)
+        video_duration = max(0, full_duration - args.offset)
+        if args.process_duration:
+            video_duration = min(video_duration, args.process_duration)
+
+        silence_intervals = list(silence_intervals_master)
+
+        duration_diff = abs(analyzed_duration - video_duration)
+        if duration_diff > 1.0:
+            print(f"  Warning: Sidecar analyzed {analyzed_duration:.1f}s but "
+                  f"'{video_name}' is {video_duration:.1f}s (diff: {duration_diff:.1f}s). "
+                  f"Truncating intervals.", file=sys.stderr)
+            silence_intervals = truncate_intervals_to_duration(
+                silence_intervals, video_duration
+            )
+
+        segments = calculate_segments(silence_intervals, video_duration)
+
+        filtergraph = build_filtergraph(
+            segments,
+            args.indicator,
+            use_gpu_decode=False,
+            png_input_index=1,
+            png_path=png_path
+        )
+
+        codec_name = get_video_codec(video_path)
+        run_ffmpeg_processing(
+            video_path,
+            output_path,
+            filtergraph,
+            video_duration,
+            codec_name,
+            use_gpu=args.gpu,
+            offset=args.offset,
+            process_duration=args.process_duration,
+            png_path=png_path,
+            use_gpu_decode=False,
+            progress_segments=segments,
+            show_progress=show_progress,
+        )
+        return {"status": "success", "file": video_name}
+    except Exception as e:
+        print(f"  Error processing '{video_name}': {e}", file=sys.stderr)
+        return {"status": "error", "file": video_name, "error": str(e)}
+
+
 def main():
     args = parse_args()
 
@@ -1139,6 +1205,17 @@ def main():
     if args.vad_master and not args.folder:
         print("Error: --vad-master requires --folder.", file=sys.stderr)
         sys.exit(1)
+
+    # --parallel validation
+    if args.parallel < 1:
+        print("Error: --parallel must be >= 1.", file=sys.stderr)
+        sys.exit(1)
+    if args.parallel > 1 and not args.folder:
+        print("[info] --parallel is only used in folder mode; ignoring.", file=sys.stderr)
+    if args.parallel > 4 and args.gpu:
+        print(f"Warning: --parallel {args.parallel} with --gpu may exceed NVENC session limits. "
+              f"Consumer GPUs support 8-12 concurrent sessions. Consider --parallel 2-4.",
+              file=sys.stderr)
 
     # Mode-specific required args
     if args.folder:
@@ -1357,81 +1434,62 @@ def main():
 
         png_path = os.path.join(os.path.dirname(__file__), "fastforward.png")
 
-        # DYK #4: GPU decode must be set independently (line 1236 unreachable from here)
+        # GPU decode is always off in folder mode
         args.gpu_decode = False
+
+        show_progress = (args.parallel == 1)
+        total = len(videos)
+
+        if args.parallel > 1:
+            print(f"Processing {total} video(s) with --parallel {args.parallel}")
 
         success_count = 0
         skip_count = 0
         fail_count = 0
         failed_files = []
 
-        for video_path in videos:
-            video_name = os.path.basename(video_path)
-            output_path = os.path.join(output_dir, video_name)
-
-            # Skip existing unless --overwrite
-            if os.path.isfile(output_path) and not args.overwrite:
-                if not args.quiet:
-                    print(f"Skipping (output exists): {video_name}")
-                skip_count += 1
-                continue
-
-            print(f"\nProcessing: {video_name}")
-            try:
-                # Compute per-video duration
-                full_duration = get_video_duration(video_path)
-                video_duration = max(0, full_duration - args.offset)
-                if args.process_duration:
-                    video_duration = min(video_duration, args.process_duration)
-
-                # DYK #2: Defensive copy before truncating per-video
-                silence_intervals = list(silence_intervals_master)
-
-                # Duration mismatch: truncate + warn per video
-                duration_diff = abs(analyzed_duration - video_duration)
-                if duration_diff > 1.0:
-                    print(f"  Warning: Sidecar analyzed {analyzed_duration:.1f}s but "
-                          f"'{video_name}' is {video_duration:.1f}s (diff: {duration_diff:.1f}s). "
-                          f"Truncating intervals.", file=sys.stderr)
-                    silence_intervals = truncate_intervals_to_duration(
-                        silence_intervals, video_duration
-                    )
-
-                segments = calculate_segments(silence_intervals, video_duration)
-
-                # DYK #4: Set setattr per video iteration
-                setattr(run_ffmpeg_processing, "use_gpu_decode", False)
-                setattr(run_ffmpeg_processing, "progress_segments", segments)
-
-                filtergraph = build_filtergraph(
-                    segments,
-                    args.indicator,
-                    use_gpu_decode=False,
-                    png_input_index=1,
-                    png_path=png_path
+        if args.parallel == 1:
+            # Sequential mode (backward compatible)
+            for video_path in videos:
+                result = process_single_video(
+                    video_path, output_dir, silence_intervals_master,
+                    analyzed_duration, args, png_path, show_progress=True,
                 )
-
-                codec_name = get_video_codec(video_path)
-                run_ffmpeg_processing(
-                    video_path,
-                    output_path,
-                    filtergraph,
-                    video_duration,
-                    codec_name,
-                    use_gpu=args.gpu,
-                    offset=args.offset,
-                    process_duration=args.process_duration,
-                    png_path=png_path
-                )
-                success_count += 1
-            except Exception as e:
-                print(f"  Error processing '{video_name}': {e}", file=sys.stderr)
-                fail_count += 1
-                failed_files.append(video_name)
-                continue
+                if result["status"] == "success":
+                    success_count += 1
+                elif result["status"] == "skipped":
+                    skip_count += 1
+                else:
+                    fail_count += 1
+                    failed_files.append(result["file"])
+        else:
+            # Parallel mode
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            completed = 0
+            with ThreadPoolExecutor(max_workers=args.parallel) as executor:
+                futures = {
+                    executor.submit(
+                        process_single_video, vp, output_dir,
+                        silence_intervals_master, analyzed_duration,
+                        args, png_path, False,
+                    ): vp
+                    for vp in videos
+                }
+                for future in as_completed(futures):
+                    result = future.result()
+                    completed += 1
+                    if result["status"] == "success":
+                        success_count += 1
+                        print(f"  [{completed}/{total}] Completed: {result['file']}")
+                    elif result["status"] == "skipped":
+                        skip_count += 1
+                        print(f"  [{completed}/{total}] Skipped: {result['file']}")
+                    else:
+                        fail_count += 1
+                        failed_files.append(result["file"])
+                        print(f"  [{completed}/{total}] Failed: {result['file']} — {result.get('error', 'unknown')}")
 
         # Print summary (always, even with --quiet)
-        total = len(videos)
         print(f"\nDone. {success_count}/{total} videos processed"
               f"{f', {skip_count} skipped' if skip_count else ''}"
               f"{f', {fail_count} failed' if fail_count else ''}.")
@@ -1575,17 +1633,11 @@ def main():
                     f"out_dur={longest_silent['out_dur']:.2f}s"
                 )
 
-        # Set attribute for GPU decode (hacky, but avoids changing all function signatures)
-        setattr(run_ffmpeg_processing, "use_gpu_decode", args.gpu_decode)
-        # Progress mapping: let run_ffmpeg_processing estimate input-time progress even when output time is
-        # compressed by setpts for sped-up segments.
-        setattr(run_ffmpeg_processing, "progress_segments", segments)
-
         # Task 3.2: Build FFmpeg filtergraph
         filtergraph = build_filtergraph(
             segments,
             args.indicator,
-            use_gpu_decode=getattr(run_ffmpeg_processing, "use_gpu_decode", False),
+            use_gpu_decode=args.gpu_decode,
             png_input_index=1,
             png_path=png_path
         )
@@ -1608,7 +1660,9 @@ def main():
             use_gpu=args.gpu,
             offset=args.offset,
             process_duration=args.process_duration,
-            png_path=png_path
+            png_path=png_path,
+            use_gpu_decode=args.gpu_decode,
+            progress_segments=segments,
         )
     except Exception as e:
         import traceback

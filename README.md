@@ -108,6 +108,7 @@ python videospeeder.py --input <your_video.mp4> --output <output_video.mp4> [OPT
 *   `--vad-master`: Master video file for VAD detection in folder mode. Detects speech on this file, writes a sidecar, then processes all videos in `--folder`.
 *   `--overwrite`: Re-process videos even if output files already exist (default: skip existing).
 *   `--extensions`: Comma-separated video file extensions for folder mode (Default: `mp4,mkv,mov,avi,webm`).
+*   `--parallel N`: Process N videos simultaneously in folder mode (Default: 1). Best with `--gpu`; each video uses one NVENC session.
 
 **Example:**
 
@@ -145,6 +146,12 @@ python videospeeder.py --folder recordings/ -o recordings/output/ --gpu
 python videospeeder.py --folder recordings/ --vad-master facecam.mp4 -o recordings/output/ --gpu
 ```
 
+**Parallel processing (process 2 videos at once for ~1.8x faster throughput):**
+
+```bash
+python videospeeder.py --folder recordings/ -o recordings/output/ --gpu --parallel 2
+```
+
 Both workflows produce output files with identical segment timing, so they stay in perfect sync when imported into your NLE.
 
 **Folder mode features:**
@@ -152,6 +159,7 @@ Both workflows produce output files with identical segment timing, so they stay 
 - Skips already-processed outputs by default; use `--overwrite` to re-process
 - Continues processing if a single file fails, with a summary at the end
 - Handles duration mismatches between angles (truncates silence intervals per video)
+- `--parallel N` processes N videos simultaneously; `--parallel 2` is the sweet spot for GPU encoding. Consumer GPUs support 8-12 concurrent NVENC sessions
 
 **Offline note for `--vad`:**
 - Silero VAD may download/cache model assets on first use. If you're offline, run once while online or preload
