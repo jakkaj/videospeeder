@@ -991,6 +991,13 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
     if decoder_args:
         print(f"Selected decoder args: {' '.join(decoder_args)}")
 
+    # Write filtergraph to a temp file to avoid "Argument list too long" on long videos
+    import tempfile
+    fg_file = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, prefix="vs_filtergraph_")
+    fg_file.write(filtergraph)
+    fg_file.close()
+    fg_path = fg_file.name
+
     cmd = ["ffmpeg", "-y"]
     cmd += decoder_args
     if offset and offset > 0:
@@ -1000,7 +1007,7 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
     cmd += [
         "-i", input_file,
         "-i", png_path,  # Add PNG as second input
-        "-filter_complex", filtergraph,
+        "-filter_complex_script", fg_path,
         "-map", "[vout]",
         "-map", "[aout]",
         "-c:v", vcodec,
@@ -1013,6 +1020,7 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
     ]
     print("Running FFmpeg processing command:")
     print(" ".join(cmd))
+    print(f"Filtergraph written to: {fg_path} ({len(filtergraph)} chars)")
     try:
         progress_segments = getattr(run_ffmpeg_processing, "progress_segments", None)
         progress_map = None
@@ -1111,6 +1119,12 @@ def run_ffmpeg_processing(input_file, output_file, filtergraph, video_duration, 
     except Exception as e:
         print("Error during FFmpeg processing:", e)
         raise
+    finally:
+        # Clean up filtergraph temp file
+        try:
+            os.unlink(fg_path)
+        except OSError:
+            pass
 
 def main():
     args = parse_args()
